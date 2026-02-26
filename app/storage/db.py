@@ -15,6 +15,28 @@ class DB:
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
 
+    def __enter__(self) -> "DB":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if exc_type:
+            self.rollback()
+        else:
+            self.commit()
+        self.close()
+
+    def begin(self) -> None:
+        self.conn.execute("BEGIN")
+
+    def commit(self) -> None:
+        self.conn.commit()
+
+    def rollback(self) -> None:
+        self.conn.rollback()
+
+    def close(self) -> None:
+        self.conn.close()
+
     def init(self) -> None:
         cur = self.conn.cursor()
         cur.execute(
@@ -22,7 +44,7 @@ class DB:
             create table if not exists news_events (
               id integer primary key autoincrement,
               source text not null,
-              tier integer not null,
+              tier integer not null check (tier in (1,2,3)),
               published_at text not null,
               title text not null,
               body text,
@@ -54,17 +76,17 @@ class DB:
               event_ticker_id integer not null,
               ticker text not null,
               raw_score real not null,
-              total_score real not null,
+              total_score real not null check (total_score >= 0 and total_score <= 100),
               components text not null,
-              priced_in_flag text not null,
-              decision text not null,
+              priced_in_flag text not null check (priced_in_flag in ('LOW','MEDIUM','HIGH')),
+              decision text not null check (decision in ('BUY','HOLD','IGNORE','BLOCK')),
               created_at text default current_timestamp
             )
             """
         )
         self.conn.commit()
 
-    def insert_news_if_new(self, item: dict[str, Any]) -> int | None:
+    def insert_news_if_new(self, item: dict[str, Any], autocommit: bool = True) -> int | None:
         cur = self.conn.cursor()
         try:
             cur.execute(
@@ -82,12 +104,21 @@ class DB:
                     item["raw_hash"],
                 ),
             )
-            self.conn.commit()
+            if autocommit:
+                self.conn.commit()
             return int(cur.lastrowid)
         except sqlite3.IntegrityError:
             return None
 
-    def insert_event_ticker(self, news_id: int, ticker: str, company_name: str, confidence: float, method: str) -> int:
+    def insert_event_ticker(
+        self,
+        news_id: int,
+        ticker: str,
+        company_name: str,
+        confidence: float,
+        method: str,
+        autocommit: bool = True,
+    ) -> int:
         cur = self.conn.cursor()
         cur.execute(
             """
@@ -96,7 +127,8 @@ class DB:
             """,
             (news_id, ticker, company_name, confidence, method),
         )
-        self.conn.commit()
+        if autocommit:
+            self.conn.commit()
         return int(cur.lastrowid)
 
     def get_event_ticker(self, event_ticker_id: int) -> dict[str, Any] | None:
@@ -105,7 +137,7 @@ class DB:
         row = cur.fetchone()
         return dict(row) if row else None
 
-    def insert_signal(self, payload: dict[str, Any]) -> int:
+    def insert_signal(self, payload: dict[str, Any], autocommit: bool = True) -> int:
         cur = self.conn.cursor()
         cur.execute(
             """
@@ -123,5 +155,6 @@ class DB:
                 payload["decision"],
             ),
         )
-        self.conn.commit()
+        if autocommit:
+            self.conn.commit()
         return int(cur.lastrowid)
