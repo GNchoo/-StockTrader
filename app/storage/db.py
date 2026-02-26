@@ -19,10 +19,8 @@ class DB:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        if exc_type:
-            self.rollback()
-        else:
-            self.commit()
+        # Close-only context manager: transaction lifecycle is controlled explicitly
+        # by caller via begin()/commit()/rollback().
         self.close()
 
     def begin(self) -> None:
