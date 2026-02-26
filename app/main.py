@@ -10,6 +10,7 @@ from app.execution.broker_base import OrderRequest
 from app.risk.engine import can_trade
 from app.storage.db import DB
 from app.signal.scorer import ScoreInput, compute_scores
+from app.monitor.telegram_logger import log_and_notify
 
 
 class SignalBundle(TypedDict):
@@ -44,13 +45,13 @@ def ingest_and_create_signal(db: DB) -> SignalBundle | None:
 
         if news_id is None:
             db.rollback()
-            print("DUP_NEWS_SKIPPED")
+            log_and_notify("DUP_NEWS_SKIPPED")
             return None
 
         mapping: MappingResult | None = map_ticker(news.title + " " + news.body)
         if not mapping:
             db.rollback()
-            print("NO_MAPPING")
+            log_and_notify("NO_MAPPING")
             return None
 
         event_ticker_id = db.insert_event_ticker(
@@ -65,7 +66,7 @@ def ingest_and_create_signal(db: DB) -> SignalBundle | None:
         row = db.get_event_ticker(event_ticker_id)
         if not row:
             db.rollback()
-            print("EVENT_TICKER_NOT_FOUND")
+            log_and_notify("EVENT_TICKER_NOT_FOUND")
             return None
 
         event_ticker = EventTicker(
@@ -125,13 +126,13 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
         rs = db.get_risk_state(trade_date)
         if not rs or int(rs["trading_enabled"]) != 1:
             db.rollback()
-            print("BLOCKED:RISK_DISABLED")
+            log_and_notify("BLOCKED:RISK_DISABLED")
             return False
 
         risk = can_trade(account_state=rs)
         if not risk.allowed:
             db.rollback()
-            print(f"BLOCKED:{risk.reason_code}")
+            log_and_notify(f"BLOCKED:{risk.reason_code}")
             return False
 
         position_id = db.create_position(ticker, signal_id, qty, autocommit=False)
@@ -169,7 +170,7 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
                 autocommit=False,
             )
             db.rollback()
-            print(f"BLOCKED:{result.reason_code or 'ORDER_NOT_FILLED'}")
+            log_and_notify(f"BLOCKED:{result.reason_code or 'ORDER_NOT_FILLED'}")
             return False
 
         db.update_order_filled(order_id=order_id, price=result.avg_price, autocommit=False)
@@ -206,7 +207,7 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
             autocommit=False,
         )
         db.commit()
-        print(
+        log_and_notify(
             f"ORDER_FILLED:{ticker}@{result.avg_price} "
             f"(signal_id={signal_id}, position_id={position_id}, entry_event_id={first_event_id}, duplicate={duplicate_event_id})"
         )
@@ -246,7 +247,7 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
             autocommit=False,
         )
         db.commit()
-        print(f"POSITION_CLOSED:{position_id} reason=TIME_EXIT")
+        log_and_notify(f"POSITION_CLOSED:{position_id} reason=TIME_EXIT")
         return True
     except Exception:
         db.rollback()
