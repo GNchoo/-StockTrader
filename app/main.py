@@ -155,7 +155,8 @@ def run_happy_path_demo() -> None:
                     opened_value=result.avg_price * qty,
                     autocommit=False,
                 )
-                db.insert_position_event(
+                entry_key = f"entry:{position_id}:{order_id}"
+                first_event_id = db.insert_position_event(
                     position_id=position_id,
                     event_type="ENTRY",
                     action="EXECUTED",
@@ -168,11 +169,23 @@ def run_happy_path_demo() -> None:
                             "avg_price": result.avg_price,
                         }
                     ),
-                    idempotency_key=f"entry:{position_id}:{order_id}",
+                    idempotency_key=entry_key,
+                    autocommit=False,
+                )
+                duplicate_event_id = db.insert_position_event(
+                    position_id=position_id,
+                    event_type="ENTRY",
+                    action="EXECUTED",
+                    reason_code="ENTRY_FILLED_DUP",
+                    detail_json=json.dumps({"duplicate": True}),
+                    idempotency_key=entry_key,
                     autocommit=False,
                 )
                 db.commit()
-                print(f"ORDER_FILLED:{mapping.ticker}@{result.avg_price} (signal_id={signal_id}, position_id={position_id})")
+                print(
+                    f"ORDER_FILLED:{mapping.ticker}@{result.avg_price} "
+                    f"(signal_id={signal_id}, position_id={position_id}, entry_event_id={first_event_id}, duplicate={duplicate_event_id})"
+                )
             else:
                 db.insert_position_event(
                     position_id=position_id,
@@ -185,6 +198,44 @@ def run_happy_path_demo() -> None:
                 )
                 db.rollback()
                 print(f"BLOCKED:{result.reason_code or 'ORDER_NOT_FILLED'}")
+                return
+        except Exception:
+            db.rollback()
+            raise
+
+        # ---------- Tx #3: simple close simulation (OPEN -> CLOSED) ----------
+        db.begin()
+        try:
+            exit_order_id = db.insert_order(
+                position_id=position_id,
+                signal_id=signal_id,
+                ticker=mapping.ticker,
+                side="SELL",
+                qty=qty,
+                order_type="MARKET",
+                status="SENT",
+                price=None,
+                autocommit=False,
+            )
+            db.update_order_filled(order_id=exit_order_id, price=83600.0, autocommit=False)
+            db.set_position_closed(position_id=position_id, reason_code="TIME_EXIT", autocommit=False)
+            db.insert_position_event(
+                position_id=position_id,
+                event_type="FULL_EXIT",
+                action="EXECUTED",
+                reason_code="TIME_EXIT",
+                detail_json=json.dumps(
+                    {
+                        "signal_id": signal_id,
+                        "exit_order_id": exit_order_id,
+                        "exit_price": 83600.0,
+                    }
+                ),
+                idempotency_key=f"exit:{position_id}:{exit_order_id}",
+                autocommit=False,
+            )
+            db.commit()
+            print(f"POSITION_CLOSED:{position_id} reason=TIME_EXIT")
         except Exception:
             db.rollback()
             raise

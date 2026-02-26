@@ -322,15 +322,19 @@ class DB:
         detail_json: str,
         idempotency_key: str | None = None,
         autocommit: bool = True,
-    ) -> int:
+    ) -> int | None:
         cur = self.conn.cursor()
-        cur.execute(
-            """
-            insert into position_events(position_id,event_type,action,reason_code,detail_json,idempotency_key)
-            values(?,?,?,?,?,?)
-            """,
-            (position_id, event_type, action, reason_code, detail_json, idempotency_key),
-        )
-        if autocommit:
-            self.conn.commit()
-        return int(cur.lastrowid)
+        try:
+            cur.execute(
+                """
+                insert into position_events(position_id,event_type,action,reason_code,detail_json,idempotency_key)
+                values(?,?,?,?,?,?)
+                """,
+                (position_id, event_type, action, reason_code, detail_json, idempotency_key),
+            )
+            if autocommit:
+                self.conn.commit()
+            return int(cur.lastrowid)
+        except sqlite3.IntegrityError:
+            # idempotency key conflict
+            return None
