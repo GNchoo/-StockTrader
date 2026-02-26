@@ -22,8 +22,12 @@ kill_switch = KillSwitch()
 
 
 def can_trade(account_state: dict | None = None) -> RiskDecision:
-    # account_state reserved for v1.2.x expansion (daily loss, position caps, cooldown, etc.)
-    _ = account_state
     if kill_switch.enabled:
         return RiskDecision(False, "KILL_SWITCH_ON")
+
+    if account_state is not None:
+        trading_enabled = int(account_state.get("trading_enabled", 1))
+        if trading_enabled != 1:
+            return RiskDecision(False, "RISK_DISABLED")
+
     return RiskDecision(True)

@@ -124,9 +124,9 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
     try:
         db.ensure_risk_state_today(trade_date)
         rs = db.get_risk_state(trade_date)
-        if not rs or int(rs["trading_enabled"]) != 1:
+        if not rs:
             db.rollback()
-            log_and_notify("BLOCKED:RISK_DISABLED")
+            log_and_notify("BLOCKED:RISK_STATE_MISSING")
             return False
 
         risk = can_trade(account_state=rs)
@@ -197,19 +197,10 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
             idempotency_key=entry_key,
             autocommit=False,
         )
-        duplicate_event_id = db.insert_position_event(
-            position_id=position_id,
-            event_type="ENTRY",
-            action="EXECUTED",
-            reason_code="ENTRY_FILLED_DUP",
-            detail_json=json.dumps({"duplicate": True}),
-            idempotency_key=entry_key,
-            autocommit=False,
-        )
         db.commit()
         log_and_notify(
             f"ORDER_FILLED:{ticker}@{result.avg_price} "
-            f"(signal_id={signal_id}, position_id={position_id}, entry_event_id={first_event_id}, duplicate={duplicate_event_id})"
+            f"(signal_id={signal_id}, position_id={position_id}, entry_event_id={first_event_id})"
         )
     except Exception:
         db.rollback()
