@@ -18,9 +18,10 @@ ALIASES = {
 
 
 def map_ticker(text: str) -> MappingResult | None:
-    for k, v in ALIASES.items():
+    # Longest-key-first to avoid short alias preemption (e.g., "삼성" before "삼성전자")
+    for k in sorted(ALIASES.keys(), key=len, reverse=True):
         if k in text:
-            ticker, name, conf = v
+            ticker, name, conf = ALIASES[k]
             if ticker == "":
                 return None
             return MappingResult(ticker=ticker, company_name=name, confidence=conf)

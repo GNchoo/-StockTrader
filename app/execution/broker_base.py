@@ -9,6 +9,7 @@ class OrderRequest:
     side: str
     qty: float
     order_type: str = "MARKET"
+    expected_price: float | None = None
 
 
 @dataclass
