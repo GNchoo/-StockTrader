@@ -82,7 +82,88 @@ class DB:
             )
             """
         )
+        cur.execute(
+            """
+            create table if not exists positions (
+              position_id integer primary key autoincrement,
+              ticker text not null,
+              signal_id integer,
+              status text not null check (status in ('PENDING_ENTRY','OPEN','PARTIAL_EXIT','CLOSED','CANCELLED')),
+              qty real not null default 0,
+              avg_entry_price real,
+              opened_value real,
+              leverage real not null default 1.0,
+              opened_at text default current_timestamp,
+              closed_at text,
+              exit_reason_code text
+            )
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists orders (
+              id integer primary key autoincrement,
+              position_id integer,
+              signal_id integer,
+              ticker text not null,
+              side text not null check (side in ('BUY','SELL')),
+              qty real not null,
+              order_type text not null check (order_type in ('MARKET','LIMIT','STOP','STOP_LIMIT')),
+              price real,
+              status text not null check (status in ('NEW','SENT','PARTIAL_FILLED','FILLED','CANCELLED','REJECTED','EXPIRED')),
+              broker_order_id text,
+              attempt_no integer not null default 1,
+              sent_at text default current_timestamp,
+              filled_at text,
+              created_at text default current_timestamp
+            )
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists position_events (
+              id integer primary key autoincrement,
+              position_id integer not null,
+              event_time text default current_timestamp,
+              event_type text not null check (event_type in ('ENTRY','ADD','PARTIAL_EXIT','FULL_EXIT','BLOCK')),
+              action text not null check (action in ('EXECUTED','SKIPPED','BLOCKED')),
+              reason_code text not null,
+              detail_json text not null,
+              idempotency_key text unique
+            )
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists risk_state (
+              trade_date text primary key,
+              daily_realized_pnl real not null default 0,
+              daily_unrealized_pnl real not null default 0,
+              daily_loss_limit_hit integer not null default 0,
+              consecutive_losses integer not null default 0,
+              cooldown_until text,
+              trading_enabled integer not null default 1,
+              updated_at text default current_timestamp
+            )
+            """
+        )
         self.conn.commit()
+
+    def ensure_risk_state_today(self, trade_date: str) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            insert or ignore into risk_state(trade_date)
+            values(?)
+            """,
+            (trade_date,),
+        )
+
+    def get_risk_state(self, trade_date: str) -> dict[str, Any] | None:
+        cur = self.conn.cursor()
+        cur.execute("select * from risk_state where trade_date=?", (trade_date,))
+        row = cur.fetchone()
+        return dict(row) if row else None
 
     def insert_news_if_new(self, item: dict[str, Any], autocommit: bool = True) -> int | None:
         cur = self.conn.cursor()
@@ -152,6 +233,103 @@ class DB:
                 payload["priced_in_flag"],
                 payload["decision"],
             ),
+        )
+        if autocommit:
+            self.conn.commit()
+        return int(cur.lastrowid)
+
+    def create_position(self, ticker: str, signal_id: int, qty: float, autocommit: bool = True) -> int:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            insert into positions(ticker,signal_id,status,qty)
+            values(?,?, 'PENDING_ENTRY', ?)
+            """,
+            (ticker, signal_id, qty),
+        )
+        if autocommit:
+            self.conn.commit()
+        return int(cur.lastrowid)
+
+    def set_position_open(self, position_id: int, avg_entry_price: float, opened_value: float, autocommit: bool = True) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            update positions
+            set status='OPEN', avg_entry_price=?, opened_value=?
+            where position_id=?
+            """,
+            (avg_entry_price, opened_value, position_id),
+        )
+        if autocommit:
+            self.conn.commit()
+
+    def set_position_closed(self, position_id: int, reason_code: str, autocommit: bool = True) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            update positions
+            set status='CLOSED', closed_at=current_timestamp, exit_reason_code=?
+            where position_id=?
+            """,
+            (reason_code, position_id),
+        )
+        if autocommit:
+            self.conn.commit()
+
+    def insert_order(
+        self,
+        position_id: int,
+        signal_id: int,
+        ticker: str,
+        side: str,
+        qty: float,
+        order_type: str,
+        status: str,
+        price: float | None,
+        autocommit: bool = True,
+    ) -> int:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            insert into orders(position_id,signal_id,ticker,side,qty,order_type,status,price)
+            values(?,?,?,?,?,?,?,?)
+            """,
+            (position_id, signal_id, ticker, side, qty, order_type, status, price),
+        )
+        if autocommit:
+            self.conn.commit()
+        return int(cur.lastrowid)
+
+    def update_order_filled(self, order_id: int, price: float, autocommit: bool = True) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            update orders set status='FILLED', price=?, filled_at=current_timestamp
+            where id=?
+            """,
+            (price, order_id),
+        )
+        if autocommit:
+            self.conn.commit()
+
+    def insert_position_event(
+        self,
+        position_id: int,
+        event_type: str,
+        action: str,
+        reason_code: str,
+        detail_json: str,
+        idempotency_key: str | None = None,
+        autocommit: bool = True,
+    ) -> int:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            insert into position_events(position_id,event_type,action,reason_code,detail_json,idempotency_key)
+            values(?,?,?,?,?,?)
+            """,
+            (position_id, event_type, action, reason_code, detail_json, idempotency_key),
         )
         if autocommit:
             self.conn.commit()
