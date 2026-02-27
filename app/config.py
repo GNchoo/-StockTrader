@@ -37,8 +37,14 @@ class Settings:
     risk_penalty_cap: float = float(os.getenv("RISK_PENALTY_CAP", "30"))
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", os.getenv("TelegramBotToken", ""))
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", os.getenv("TelegramChatId", ""))
-    upbit_access_key: str = os.getenv("UPBIT_ACCESS_KEY", "")
-    upbit_secret_key: str = os.getenv("UPBIT_SECRET_KEY", "")
+
+    # KIS (한국투자증권) 연동 설정
+    kis_app_key: str = os.getenv("KIS_APP_KEY", "")
+    kis_app_secret: str = os.getenv("KIS_APP_SECRET", "")
+    kis_account_no: str = os.getenv("KIS_ACCOUNT_NO", "")
+    kis_product_code: str = os.getenv("KIS_PRODUCT_CODE", "01")
+    kis_mode: str = os.getenv("KIS_MODE", "paper")
+    kis_base_url: str = os.getenv("KIS_BASE_URL", "")
 
 
 settings = Settings()
