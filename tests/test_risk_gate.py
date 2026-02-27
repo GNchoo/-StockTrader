@@ -1,4 +1,3 @@
-import json
 import tempfile
 import unittest
 from datetime import datetime
@@ -8,6 +7,7 @@ from app.execution.broker_base import OrderRequest
 from app.execution.paper_broker import PaperBroker
 from app.risk.engine import can_trade, kill_switch
 from app.storage.db import DB
+from tests.helpers import seed_signal
 
 
 class TestRiskGate(unittest.TestCase):
@@ -23,37 +23,8 @@ class TestRiskGate(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def _seed_signal(self) -> int:
-        news_id = self.db.insert_news_if_new(
-            {
-                "source": "test",
-                "tier": 2,
-                "published_at": "2026-01-01T00:00:00+00:00",
-                "title": "삼성전자 테스트",
-                "body": "본문",
-                "url": "https://example.com/risk",
-                "raw_hash": "risk-h1",
-            }
-        )
-        event_ticker_id = self.db.insert_event_ticker(
-            news_id=int(news_id),
-            ticker="005930",
-            company_name="삼성전자",
-            confidence=0.98,
-            method="alias_dict",
-        )
-        signal_id = self.db.insert_signal(
-            {
-                "news_id": int(news_id),
-                "event_ticker_id": int(event_ticker_id),
-                "ticker": "005930",
-                "raw_score": 80,
-                "total_score": 80,
-                "components": json.dumps({"impact": 80}),
-                "priced_in_flag": "LOW",
-                "decision": "BUY",
-            }
-        )
-        return int(signal_id)
+        _, _, signal_id = seed_signal(self.db, url="https://example.com/risk", raw_hash="risk-h1")
+        return signal_id
 
     def test_risk_state_trading_disabled_blocks_flow(self) -> None:
         signal_id = self._seed_signal()

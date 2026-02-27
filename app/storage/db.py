@@ -1,6 +1,11 @@
 import sqlite3
 from pathlib import Path
 from typing import Any
+import json
+
+
+class IllegalTransitionError(RuntimeError):
+    """Raised when position status transition is not allowed."""
 
 
 class DB:
@@ -147,9 +152,30 @@ class DB:
             )
             """
         )
+        cur.execute(
+            """
+            create table if not exists parameter_registry (
+              id integer primary key autoincrement,
+              name text unique not null,
+              value_json text not null,
+              scope text not null,
+              tune_required integer not null default 1,
+              target_phase text,
+              rationale text,
+              evidence_link text,
+              updated_at text default current_timestamp
+            )
+            """
+        )
+        cur.execute(
+            """
+            insert or ignore into parameter_registry(name, value_json, scope, tune_required, target_phase, rationale)
+            values('score_weights', '{"impact":0.30,"source_reliability":0.20,"novelty":0.20,"market_reaction":0.15,"liquidity":0.15}', 'global', 0, null, 'v1.2.3 base')
+            """
+        )
         self.conn.commit()
 
-    def ensure_risk_state_today(self, trade_date: str) -> None:
+    def ensure_risk_state_today(self, trade_date: str, autocommit: bool = True) -> None:
         cur = self.conn.cursor()
         cur.execute(
             """
@@ -158,12 +184,35 @@ class DB:
             """,
             (trade_date,),
         )
+        if autocommit:
+            self.conn.commit()
 
     def get_risk_state(self, trade_date: str) -> dict[str, Any] | None:
         cur = self.conn.cursor()
         cur.execute("select * from risk_state where trade_date=?", (trade_date,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+    def get_parameter(self, name: str) -> dict[str, Any] | None:
+        cur = self.conn.cursor()
+        cur.execute("select value_json from parameter_registry where name=?", (name,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row["value_json"])
+        except Exception:
+            return None
+
+    def get_score_weights(self) -> dict[str, float] | None:
+        raw = self.get_parameter("score_weights")
+        if not raw:
+            return None
+        keys = ["impact", "source_reliability", "novelty", "market_reaction", "liquidity"]
+        try:
+            return {k: float(raw[k]) for k in keys}
+        except Exception:
+            return None
 
     def insert_news_if_new(self, item: dict[str, Any], autocommit: bool = True) -> int | None:
         cur = self.conn.cursor()
@@ -257,10 +306,12 @@ class DB:
             """
             update positions
             set status='OPEN', avg_entry_price=?, opened_value=?
-            where position_id=?
+            where position_id=? and status='PENDING_ENTRY'
             """,
             (avg_entry_price, opened_value, position_id),
         )
+        if cur.rowcount == 0:
+            raise IllegalTransitionError(f"Invalid transition to OPEN for position_id={position_id}")
         if autocommit:
             self.conn.commit()
 
@@ -270,10 +321,12 @@ class DB:
             """
             update positions
             set status='CLOSED', closed_at=current_timestamp, exit_reason_code=?
-            where position_id=?
+            where position_id=? and status='OPEN'
             """,
             (reason_code, position_id),
         )
+        if cur.rowcount == 0:
+            raise IllegalTransitionError(f"Invalid transition to CLOSED for position_id={position_id}")
         if autocommit:
             self.conn.commit()
 

@@ -28,8 +28,20 @@ class KISBroker(BrokerBase):
     def health_check(self) -> dict:
         has_keys = bool(settings.kis_app_key and settings.kis_app_secret)
         has_account = bool(settings.kis_account_no)
+
+        if has_keys and has_account:
+            status = "OK"
+            reason = None
+        elif has_keys and not has_account:
+            status = "WARN"
+            reason = "MISSING_ACCOUNT"
+        else:
+            status = "CRITICAL"
+            reason = "MISSING_CREDENTIALS"
+
         return {
-            "status": "OK" if has_keys else "MISSING_CREDENTIALS",
+            "status": status,
+            "reason_code": reason,
             "checks": {
                 "broker": "kis",
                 "mode": self.mode,

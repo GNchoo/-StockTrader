@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from app.storage.db import DB
+from tests.helpers import seed_signal
 
 
 class TestLifecycle(unittest.TestCase):
@@ -18,43 +19,7 @@ class TestLifecycle(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def _seed_signal(self) -> tuple[int, int, int]:
-        # news
-        news_id = self.db.insert_news_if_new(
-            {
-                "source": "test",
-                "tier": 2,
-                "published_at": "2026-01-01T00:00:00+00:00",
-                "title": "삼성전자 테스트",
-                "body": "본문",
-                "url": "https://example.com/t1",
-                "raw_hash": "h1",
-            }
-        )
-        self.assertIsNotNone(news_id)
-
-        # mapping
-        event_ticker_id = self.db.insert_event_ticker(
-            news_id=news_id,
-            ticker="005930",
-            company_name="삼성전자",
-            confidence=0.98,
-            method="alias_dict",
-        )
-
-        # signal
-        signal_id = self.db.insert_signal(
-            {
-                "news_id": news_id,
-                "event_ticker_id": event_ticker_id,
-                "ticker": "005930",
-                "raw_score": 80,
-                "total_score": 80,
-                "components": json.dumps({"impact": 80}),
-                "priced_in_flag": "LOW",
-                "decision": "BUY",
-            }
-        )
-        return int(news_id), int(event_ticker_id), int(signal_id)
+        return seed_signal(self.db, url="https://example.com/t1", raw_hash="h1")
 
     def test_position_lifecycle_pending_open_closed(self) -> None:
         _, _, signal_id = self._seed_signal()

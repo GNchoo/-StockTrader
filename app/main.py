@@ -85,6 +85,7 @@ def ingest_and_create_signal(db: DB) -> SignalBundle | None:
             "risk_penalty": 10,
             "freshness_weight": 1.0,
         }
+        weights = db.get_score_weights()
         raw_score, total_score = compute_scores(
             ScoreInput(
                 impact=components["impact"],
@@ -93,7 +94,8 @@ def ingest_and_create_signal(db: DB) -> SignalBundle | None:
                 market_reaction=components["market_reaction"],
                 liquidity=components["liquidity"],
                 risk_penalty=components["risk_penalty"],
-            )
+            ),
+            weights=weights,
         )
 
         signal_id = db.insert_signal(
@@ -122,7 +124,7 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
 
     db.begin()
     try:
-        db.ensure_risk_state_today(trade_date)
+        db.ensure_risk_state_today(trade_date, autocommit=False)
         rs = db.get_risk_state(trade_date)
         if not rs:
             db.rollback()
