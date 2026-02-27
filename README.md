@@ -20,15 +20,19 @@ python3 -m app.main
 ```
 
 환경 변수는 `.env`(또는 로컬 전용 `.env.local`)에 설정하세요.
+- Broker 선택: `BROKER=paper|kis` (기본: `paper`)
 - Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 - KIS(한국투자증권): `KIS_APP_KEY`, `KIS_APP_SECRET`, `KIS_ACCOUNT_NO`, `KIS_PRODUCT_CODE`, `KIS_MODE`
 - `.env`/`.env.local`은 커밋되지 않고, `.env.example`만 커밋됩니다.
 
 ## 브로커 연동 방향
 - 현재 기본 실행은 `PaperBroker`(모의 브로커) 기반입니다.
-- 실거래 브로커는 **한국투자증권(KIS)** 기준으로 진행합니다.
-- `app/execution/kis_broker.py`에 KIS 연동 스켈레톤을 추가해 두었고,
-  다음 단계에서 인증 토큰 발급/주문 API 연결을 붙일 예정입니다.
+- `BROKER=kis` 설정 시 `KISBroker`를 사용합니다.
+- `KISBroker`는 현재 다음을 지원합니다.
+  - OAuth 토큰 발급
+  - 현금주문 API 호출(매수/매도)
+  - 헬스체크(OK/WARN/CRITICAL)
+- 체결조회/정정/취소/정산 반영은 다음 단계에서 확장 예정입니다.
 
 예상 출력(예시):
 ```text

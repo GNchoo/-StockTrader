@@ -6,16 +6,25 @@ from app.ingestion.news_feed import sample_news, build_hash
 from app.nlp.ticker_mapper import map_ticker, MappingResult
 from app.signal.integrity import EventTicker, validate_signal_binding
 from app.execution.paper_broker import PaperBroker
+from app.execution.kis_broker import KISBroker
 from app.execution.broker_base import OrderRequest
 from app.risk.engine import can_trade
 from app.storage.db import DB
 from app.signal.scorer import ScoreInput, compute_scores
 from app.monitor.telegram_logger import log_and_notify
+from app.config import settings
 
 
 class SignalBundle(TypedDict):
     signal_id: int
     ticker: str
+
+
+def _build_broker():
+    broker_name = (settings.broker or "paper").lower()
+    if broker_name == "kis":
+        return KISBroker()
+    return PaperBroker()
 
 
 def ingest_and_create_signal(db: DB) -> SignalBundle | None:
@@ -150,7 +159,7 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
             autocommit=False,
         )
 
-        broker = PaperBroker()
+        broker = _build_broker()
         result = broker.send_order(
             OrderRequest(
                 signal_id=signal_id,

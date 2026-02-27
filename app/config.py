@@ -38,6 +38,9 @@ class Settings:
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", os.getenv("TelegramBotToken", ""))
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", os.getenv("TelegramChatId", ""))
 
+    # 브로커 선택: paper | kis
+    broker: str = os.getenv("BROKER", "paper").lower()
+
     # KIS (한국투자증권) 연동 설정
     kis_app_key: str = os.getenv("KIS_APP_KEY", "")
     kis_app_secret: str = os.getenv("KIS_APP_SECRET", "")
