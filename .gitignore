@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
 *.db
-.env.local
+.env
+.env.*
+!.env.example

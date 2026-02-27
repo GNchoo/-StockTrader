@@ -3,8 +3,7 @@ import os
 from pathlib import Path
 
 
-def _load_local_env() -> None:
-    env_path = Path(__file__).resolve().parents[1] / ".env.local"
+def _parse_env_file(env_path: Path) -> None:
     if not env_path.exists():
         return
     for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -12,7 +11,20 @@ def _load_local_env() -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, v = line.split("=", 1)
-        os.environ.setdefault(k.strip(), v.strip())
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+def _load_local_env() -> None:
+    base = Path(__file__).resolve().parents[1]
+
+    # python-dotenv 사용 가능하면 .env + .env.local 자동 로드
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=base / ".env")
+        load_dotenv(dotenv_path=base / ".env.local")
+    except Exception:
+        _parse_env_file(base / ".env")
+        _parse_env_file(base / ".env.local")
 
 
 _load_local_env()
@@ -23,8 +35,10 @@ class Settings:
     database_url: str = os.getenv("DATABASE_URL", "postgresql://localhost:5432/stock_trader")
     min_map_confidence: float = float(os.getenv("MIN_MAP_CONFIDENCE", "0.92"))
     risk_penalty_cap: float = float(os.getenv("RISK_PENALTY_CAP", "30"))
-    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", os.getenv("TelegramBotToken", ""))
+    telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", os.getenv("TelegramChatId", ""))
+    upbit_access_key: str = os.getenv("UPBIT_ACCESS_KEY", "")
+    upbit_secret_key: str = os.getenv("UPBIT_SECRET_KEY", "")
 
 
 settings = Settings()

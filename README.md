@@ -15,8 +15,14 @@
 ## 실행
 ```bash
 cd stock_trader
+cp .env.example .env
 python3 -m app.main
 ```
+
+환경 변수는 `.env`(또는 로컬 전용 `.env.local`)에 설정하세요.
+- Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+- Upbit(선택): `UPBIT_ACCESS_KEY`, `UPBIT_SECRET_KEY`
+- `.env`/`.env.local`은 커밋되지 않고, `.env.example`만 커밋됩니다.
 
 예상 출력(예시):
 ```text
