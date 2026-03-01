@@ -20,6 +20,20 @@ class KISToken:
 
 
 class KISBroker(BrokerBase):
+    @staticmethod
+    def _to_float(v: Any) -> float:
+        if v is None:
+            return 0.0
+        if isinstance(v, (int, float)):
+            return float(v)
+        s = str(v).strip().replace(",", "")
+        if s == "":
+            return 0.0
+        try:
+            return float(s)
+        except Exception:
+            return 0.0
+
     """한국투자증권(KIS) 브로커.
 
     - OAuth 토큰 발급
@@ -177,6 +191,12 @@ class KISBroker(BrokerBase):
         except Exception:
             return None
 
+        if isinstance(data, dict):
+            rt_cd = str(data.get("rt_cd", "0"))
+            if rt_cd and rt_cd != "0":
+                msg = data.get("msg1") or data.get("msg_cd") or "KIS_INQUIRE_FAILED"
+                return OrderResult(status="REJECTED", filled_qty=0, avg_price=0.0, reason_code=str(msg), broker_order_id=str(broker_order_id))
+
         rows = []
         if isinstance(data, dict):
             rows = data.get("output1") or data.get("output") or []
@@ -191,9 +211,18 @@ class KISBroker(BrokerBase):
         if not row:
             return None
 
-        ord_qty = float(row.get("ord_qty") or row.get("ORD_QTY") or 0)
-        ccld_qty = float(row.get("tot_ccld_qty") or row.get("TOT_CCLD_QTY") or row.get("ccld_qty") or 0)
-        avg_price = float(row.get("avg_prvs") or row.get("avg_pric") or row.get("AVG_PRIC") or row.get("tot_ccld_unpr") or 0)
+        ord_status = str(row.get("ord_sts") or row.get("ORD_STS") or "").upper()
+        if ord_status in {"CANCELLED", "REJECTED", "EXPIRED", "취소", "거부"}:
+            return OrderResult(status="REJECTED", filled_qty=0, avg_price=0.0, reason_code=ord_status or "ORDER_REJECTED", broker_order_id=str(broker_order_id))
+
+        ord_qty = self._to_float(row.get("ord_qty") or row.get("ORD_QTY"))
+        ccld_qty = self._to_float(row.get("tot_ccld_qty") or row.get("TOT_CCLD_QTY") or row.get("ccld_qty") or row.get("CCLD_QTY"))
+        avg_price = self._to_float(row.get("avg_prvs") or row.get("avg_pric") or row.get("AVG_PRIC") or row.get("tot_ccld_unpr") or row.get("TOT_CCLD_UNPR"))
+
+        if avg_price <= 0 and ccld_qty > 0:
+            total_amt = self._to_float(row.get("tot_ccld_amt") or row.get("TOT_CCLD_AMT"))
+            if total_amt > 0:
+                avg_price = total_amt / max(ccld_qty, 1)
 
         if ccld_qty <= 0:
             return OrderResult(status="SENT", filled_qty=0, avg_price=0.0, broker_order_id=str(broker_order_id))
