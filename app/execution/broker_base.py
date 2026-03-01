@@ -30,6 +30,10 @@ class BrokerBase(ABC):
         """주문 상태 조회 (미구현 브로커는 None 반환)."""
         return None
 
+    def get_last_price(self, ticker: str) -> float | None:
+        """현재가 조회 (미구현 브로커는 None 반환)."""
+        return None
+
     @abstractmethod
     def health_check(self) -> dict:
         raise NotImplementedError

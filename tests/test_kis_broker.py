@@ -96,6 +96,21 @@ class TestKISBroker(unittest.TestCase):
         self.assertEqual(out.status, "REJECTED")
         self.assertEqual(out.reason_code, "NO_DATA")
 
+    def test_get_last_price_parse(self):
+        b = KISBroker()
+        b._auth_header = lambda: {"authorization": "Bearer X"}  # type: ignore[attr-defined]
+
+        class R:
+            ok = True
+            text = "{}"
+
+            def json(self):
+                return {"output": {"stck_prpr": "83,500"}}
+
+        b.session.get = lambda *a, **k: R()  # type: ignore[method-assign]
+        px = b.get_last_price("005930")
+        self.assertEqual(px, 83500.0)
+
 
 if __name__ == "__main__":
     unittest.main()

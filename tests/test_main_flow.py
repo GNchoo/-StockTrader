@@ -12,6 +12,7 @@ from app.main import (
     trigger_time_exit_orders,
     trigger_trailing_stop_orders,
     trigger_opposite_signal_exit_orders,
+    _collect_current_prices,
 )
 from app.storage.db import DB, IllegalTransitionError
 from app.risk.engine import kill_switch
@@ -457,6 +458,19 @@ class TestMainFlow(unittest.TestCase):
         self.assertEqual(cur.fetchone()[0], 1)
         cur.execute("select status from positions where position_id=?", (pos_id,))
         self.assertEqual(cur.fetchone()[0], "PARTIAL_EXIT")
+
+    def test_collect_current_prices_fallback_entry_price(self) -> None:
+        self.db.begin()
+        pos_id = self.db.create_position("005930", 1, 1.0, autocommit=False)
+        self.db.set_position_open(pos_id, avg_entry_price=83500.0, opened_value=83500.0, autocommit=False)
+        self.db.commit()
+
+        class DummyBroker:
+            def get_last_price(self, ticker: str):
+                return None
+
+        px = _collect_current_prices(self.db, DummyBroker())
+        self.assertEqual(px.get("005930"), 83500.0)
 
 
 if __name__ == "__main__":

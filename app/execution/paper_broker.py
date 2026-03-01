@@ -21,5 +21,10 @@ class PaperBroker(BrokerBase):
             broker_order_id=f"PAPER-{int(time.time()*1000)}",
         )
 
+    def get_last_price(self, ticker: str) -> float | None:
+        # deterministic pseudo quote for demo/testing loops
+        base = 80000 + (sum(ord(c) for c in ticker) % 4000)
+        return float(base)
+
     def health_check(self) -> dict:
         return {"status": "OK", "latency_ms": self.base_latency_ms, "checks": {"broker": "paper"}}

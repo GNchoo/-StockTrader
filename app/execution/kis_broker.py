@@ -230,6 +230,28 @@ class KISBroker(BrokerBase):
             return OrderResult(status="PARTIAL_FILLED", filled_qty=ccld_qty, avg_price=avg_price, broker_order_id=str(broker_order_id))
         return OrderResult(status="FILLED", filled_qty=ccld_qty or ord_qty, avg_price=avg_price, broker_order_id=str(broker_order_id))
 
+    def get_last_price(self, ticker: str) -> float | None:
+        """현재가 조회 (국내주식 현재가 시세)."""
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-price"
+        headers = {
+            **self._auth_header(),
+            "appkey": settings.kis_app_key,
+            "appsecret": settings.kis_app_secret,
+            "tr_id": "FHKST01010100",
+            "custtype": "P",
+        }
+        params = {"fid_cond_mrkt_div_code": "J", "fid_input_iscd": str(ticker)}
+        try:
+            r = self.session.get(url, headers=headers, params=params, timeout=5)
+            if not r.ok:
+                return None
+            data = r.json() if r.text else {}
+            out = data.get("output", {}) if isinstance(data, dict) else {}
+            px = self._to_float(out.get("stck_prpr") or out.get("stck_clpr") or out.get("bstp_nmix_prpr"))
+            return px if px > 0 else None
+        except Exception:
+            return None
+
     def health_check(self) -> dict:
         has_keys = bool(settings.kis_app_key and settings.kis_app_secret)
         has_account = bool(settings.kis_account_no)

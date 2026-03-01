@@ -1153,15 +1153,36 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> Exe
         raise
 
 
+def _collect_current_prices(db: DB, broker, limit: int = 100) -> dict[str, float]:
+    prices: dict[str, float] = {}
+    for p in db.get_positions_for_exit_scan(limit=limit):
+        ticker = str(p["ticker"])
+        if ticker in prices:
+            continue
+        px = broker.get_last_price(ticker)
+        if px and px > 0:
+            prices[ticker] = float(px)
+            continue
+        fallback = float(p.get("avg_entry_price") or 0.0)
+        if fallback > 0:
+            prices[ticker] = fallback
+    return prices
+
+
 def run_happy_path_demo() -> None:
     with DB("stock_trader.db") as db:
         db.init()
         pol = db.get_exit_policy()
         sync_pending_entries(db)
-        trigger_opposite_signal_exit_orders(db, exit_score_threshold=70.0)
+        trigger_opposite_signal_exit_orders(
+            db,
+            exit_score_threshold=float(pol.get("opposite_exit_score_threshold", 70.0)),
+        )
+        broker = _build_broker()
+        current_prices = _collect_current_prices(db, broker)
         trigger_trailing_stop_orders(
             db,
-            current_prices={},  # TODO: 실시간 시세 연동 후 주입
+            current_prices=current_prices,
             trailing_arm_pct=float(pol.get("trailing_arm_pct", 0.005)),
             trailing_gap_pct=float(pol.get("trailing_gap_pct", 0.003)),
         )
