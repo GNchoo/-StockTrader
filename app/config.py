@@ -49,6 +49,9 @@ class Settings:
     kis_mode: str = os.getenv("KIS_MODE", "paper")
     kis_base_url: str = os.getenv("KIS_BASE_URL", "")
 
+    # Demo behavior
+    enable_demo_auto_close: bool = os.getenv("ENABLE_DEMO_AUTO_CLOSE", "0").strip().lower() in {"1", "true", "yes", "on"}
+
     # News ingestion
     news_mode: str = os.getenv("NEWS_MODE", "sample").lower()  # sample | rss
     news_rss_url: str = os.getenv("NEWS_RSS_URL", "https://www.mk.co.kr/rss/30000001/")

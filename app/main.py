@@ -986,7 +986,13 @@ def trigger_time_exit_orders(db: DB, max_hold_min: int = 15, limit: int = 100) -
     return created
 
 
-def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> ExecStatus:
+def execute_signal(
+    db: DB,
+    signal_id: int,
+    ticker: str,
+    qty: float = 1.0,
+    demo_auto_close: bool | None = None,
+) -> ExecStatus:
     """Tx #2 + Tx #3: risk gate, order/position lifecycle, and close simulation.
 
     Returns:
@@ -1114,7 +1120,11 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> Exe
         db.rollback()
         raise
 
-    # Tx #3: simple close simulation (OPEN -> CLOSED)
+    auto_close = settings.enable_demo_auto_close if demo_auto_close is None else bool(demo_auto_close)
+    if not auto_close:
+        return "FILLED"
+
+    # Tx #3 (optional): simple close simulation (OPEN -> CLOSED)
     db.begin()
     try:
         exit_order_id = db.insert_order(

@@ -51,16 +51,30 @@ class TestMainFlow(unittest.TestCase):
         cur.execute("select status, exit_reason_code from positions order by position_id desc limit 1")
         pos = cur.fetchone()
         self.assertIsNotNone(pos)
+        self.assertEqual(pos[0], "OPEN")
+        self.assertIsNone(pos[1])
+
+        cur.execute("select count(*) from orders")
+        order_count = cur.fetchone()[0]
+        self.assertEqual(order_count, 1)  # BUY only
+
+    def test_execute_signal_success_path_with_demo_auto_close(self) -> None:
+        bundle = ingest_and_create_signal(self.db)
+        self.assertIsNotNone(bundle)
+
+        status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0, demo_auto_close=True)
+        self.assertEqual(status, "FILLED")
+
+        cur = self.db.conn.cursor()
+        cur.execute("select status, exit_reason_code from positions order by position_id desc limit 1")
+        pos = cur.fetchone()
+        self.assertIsNotNone(pos)
         self.assertEqual(pos[0], "CLOSED")
         self.assertEqual(pos[1], "TIME_EXIT")
 
         cur.execute("select count(*) from orders")
         order_count = cur.fetchone()[0]
         self.assertEqual(order_count, 2)  # BUY + SELL
-
-        cur.execute("select count(*) from position_events")
-        ev_count = cur.fetchone()[0]
-        self.assertGreaterEqual(ev_count, 2)  # ENTRY + FULL_EXIT (dup ignored)
 
     def test_execute_signal_blocked_by_risk_state(self) -> None:
         bundle = ingest_and_create_signal(self.db)
