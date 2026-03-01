@@ -27,6 +27,18 @@ cd stock_trader
 ./scripts/dryrun_fresh.sh
 ```
 
+청산 스케줄 사이클만 1회 실행:
+```bash
+cd stock_trader
+./scripts/run_exit_cycle.sh
+```
+
+청산 스케줄 루프 상시 실행:
+```bash
+cd stock_trader
+./scripts/run_exit_loop.sh
+```
+
 (동일 명령 수동 실행)
 ```bash
 cd stock_trader
@@ -36,6 +48,7 @@ PYTHONPATH=. python3 -m app.main
 환경 변수는 `.env`(또는 로컬 전용 `.env.local`)에 설정하세요.
 - Broker 선택: `BROKER=paper|kis` (기본: `paper`)
 - 데모 즉시청산: `ENABLE_DEMO_AUTO_CLOSE=0|1` (기본: `0`, 실거래형 루프 권장)
+- 스케줄러 간격: `EXIT_CYCLE_INTERVAL_SEC=<seconds>` (기본: `60`)
 - News 소스: `NEWS_MODE=sample|rss`, `NEWS_RSS_URL=<rss-url>`
 - Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 - KIS(한국투자증권): `KIS_APP_KEY`, `KIS_APP_SECRET`, `KIS_ACCOUNT_NO`, `KIS_PRODUCT_CODE`, `KIS_MODE`

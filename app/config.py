@@ -52,6 +52,9 @@ class Settings:
     # Demo behavior
     enable_demo_auto_close: bool = os.getenv("ENABLE_DEMO_AUTO_CLOSE", "0").strip().lower() in {"1", "true", "yes", "on"}
 
+    # Scheduler
+    exit_cycle_interval_sec: int = int(os.getenv("EXIT_CYCLE_INTERVAL_SEC", "60"))
+
     # News ingestion
     news_mode: str = os.getenv("NEWS_MODE", "sample").lower()  # sample | rss
     news_rss_url: str = os.getenv("NEWS_RSS_URL", "https://www.mk.co.kr/rss/30000001/")
