@@ -38,7 +38,7 @@ def _parse_pub_date(value: str | None) -> datetime:
         return datetime.now(timezone.utc)
 
 
-def fetch_rss_news(rss_url: str, timeout: float = 5.0) -> NewsItem:
+def fetch_rss_news_items(rss_url: str, limit: int = 10, timeout: float = 5.0) -> list[NewsItem]:
     try:
         r = requests.get(rss_url, timeout=timeout)
         r.raise_for_status()
@@ -47,32 +47,43 @@ def fetch_rss_news(rss_url: str, timeout: float = 5.0) -> NewsItem:
 
     try:
         root = ET.fromstring(r.text)
-        item = root.find("./channel/item")
-        if item is None:
-            item = root.find(".//item")
-        if item is None:
+        items = root.findall("./channel/item")
+        if not items:
+            items = root.findall(".//item")
+        if not items:
             raise NewsFetchError("rss has no item")
 
-        title = (item.findtext("title") or "").strip()
-        link = (item.findtext("link") or "").strip()
-        desc = (item.findtext("description") or "").strip()
-        pub = _parse_pub_date(item.findtext("pubDate"))
+        out: list[NewsItem] = []
+        for item in items[: max(1, int(limit))]:
+            title = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            desc = (item.findtext("description") or "").strip()
+            pub = _parse_pub_date(item.findtext("pubDate"))
+            if not title or not link:
+                continue
+            out.append(
+                NewsItem(
+                    source="rss",
+                    tier=2,
+                    title=title,
+                    body=desc,
+                    url=link,
+                    published_at=pub,
+                )
+            )
 
-        if not title or not link:
+        if not out:
             raise NewsFetchError("rss item missing title/link")
-
-        return NewsItem(
-            source="rss",
-            tier=2,
-            title=title,
-            body=desc,
-            url=link,
-            published_at=pub,
-        )
+        return out
     except NewsFetchError:
         raise
     except Exception as e:
         raise NewsFetchError(f"rss parse failed: {e}") from e
+
+
+def fetch_rss_news(rss_url: str, timeout: float = 5.0) -> NewsItem:
+    items = fetch_rss_news_items(rss_url, limit=1, timeout=timeout)
+    return items[0]
 
 
 def sample_news() -> NewsItem:

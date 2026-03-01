@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from typing import TypedDict, Literal
 
-from app.ingestion.news_feed import sample_news, build_hash
+from app.ingestion.news_feed import sample_news, build_hash, fetch_rss_news_items, NewsFetchError
 from app.nlp.ticker_mapper import map_ticker, MappingResult
 from app.signal.integrity import EventTicker, validate_signal_binding
 from app.execution.paper_broker import PaperBroker
@@ -30,6 +30,22 @@ def _build_broker():
     return PaperBroker()
 
 
+def _load_news_item():
+    mode = (settings.news_mode or "sample").lower()
+    if mode == "rss":
+        try:
+            items = fetch_rss_news_items(settings.news_rss_url, limit=10)
+            # 매핑 가능한 첫 뉴스를 우선 선택
+            for n in items:
+                if map_ticker((n.title or "") + " " + (n.body or "")):
+                    return n
+            return items[0]
+        except NewsFetchError as e:
+            log_and_notify(f"NEWS_FETCH_FALLBACK_SAMPLE:{e}")
+            return sample_news()
+    return sample_news()
+
+
 def ingest_and_create_signal(db: DB) -> SignalBundle | None:
     """Tx #1: ingest + mapping + signal persistence.
 
@@ -37,7 +53,7 @@ def ingest_and_create_signal(db: DB) -> SignalBundle | None:
       - SignalBundle on success
       - None when duplicate/skip case occurs
     """
-    news = sample_news()
+    news = _load_news_item()
     raw_hash = build_hash(news)
 
     db.begin()

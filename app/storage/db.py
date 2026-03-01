@@ -185,7 +185,7 @@ class DB:
         cur.execute(
             """
             insert or ignore into parameter_registry(name, value_json, scope, tune_required, target_phase, rationale)
-            values('exit_policy', '{"time_exit_min":15,"trailing_arm_pct":0.005,"trailing_gap_pct":0.003}', 'global', 0, null, 'v1.2.3 base')
+            values('exit_policy', '{"time_exit_min":15,"trailing_arm_pct":0.005,"trailing_gap_pct":0.003,"opposite_exit_score_threshold":70}', 'global', 0, null, 'v1.2.3 base')
             """
         )
 
@@ -275,10 +275,15 @@ class DB:
             trailing_gap_pct = float(raw.get("trailing_gap_pct", 0.003) or 0.003)
         except Exception:
             trailing_gap_pct = 0.003
+        try:
+            opposite_exit_score_threshold = float(raw.get("opposite_exit_score_threshold", 70) or 70)
+        except Exception:
+            opposite_exit_score_threshold = 70.0
         return {
             "time_exit_min": max(1.0, time_exit_min),
             "trailing_arm_pct": max(0.0, trailing_arm_pct),
             "trailing_gap_pct": max(0.0, trailing_gap_pct),
+            "opposite_exit_score_threshold": max(0.0, opposite_exit_score_threshold),
         }
 
     def insert_news_if_new(self, item: dict[str, Any], autocommit: bool = True) -> int | None:
