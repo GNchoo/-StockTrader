@@ -250,6 +250,46 @@ class TestMainFlow(unittest.TestCase):
         self.assertEqual(row[0], "PARTIAL_FILLED")
         self.assertEqual(float(row[1]), 83400.0)
 
+    def test_retry_blocked_same_condition_reason(self) -> None:
+        bundle = ingest_and_create_signal(self.db)
+        self.assertIsNotNone(bundle)
+
+        with patch(
+            "app.main.PaperBroker.send_order",
+            return_value=OrderResult(status="SENT", filled_qty=0, avg_price=0, broker_order_id="ABC"),
+        ):
+            status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
+        self.assertEqual(status, "PENDING")
+
+        # stale 만들기
+        self.db.conn.execute("update orders set sent_at = datetime('now','-120 seconds') where side='BUY'")
+        self.db.conn.commit()
+
+        # 같은 거부 사유가 이미 있었다고 가정
+        cur = self.db.conn.cursor()
+        cur.execute("select position_id, id from orders where side='BUY' order by id desc limit 1")
+        pos_id, order_id = cur.fetchone()
+        self.db.insert_position_event(
+            position_id=int(pos_id),
+            event_type="BLOCK",
+            action="BLOCKED",
+            reason_code="BROKER_REJECT",
+            detail_json='{"seed":true}',
+            idempotency_key=f"seed-block:{pos_id}:{order_id}",
+        )
+
+        with patch("app.main.PaperBroker.inquire_order", return_value=None), patch(
+            "app.main.PaperBroker.send_order",
+            return_value=OrderResult(status="REJECTED", filled_qty=0, avg_price=0.0, reason_code="BROKER_REJECT", broker_order_id="DEF"),
+        ):
+            changed = sync_pending_entries(self.db)
+        self.assertGreaterEqual(changed, 1)
+
+        cur.execute("select status, exit_reason_code from positions where position_id=?", (pos_id,))
+        row = cur.fetchone()
+        self.assertEqual(row[0], "CANCELLED")
+        self.assertEqual(row[1], "RETRY_BLOCKED_SAME_CONDITION")
+
 
 if __name__ == "__main__":
     unittest.main()
