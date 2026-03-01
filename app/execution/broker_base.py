@@ -26,6 +26,10 @@ class BrokerBase(ABC):
     def send_order(self, req: OrderRequest) -> OrderResult:
         raise NotImplementedError
 
+    def inquire_order(self, broker_order_id: str, ticker: str, side: str = "BUY") -> OrderResult | None:
+        """주문 상태 조회 (미구현 브로커는 None 반환)."""
+        return None
+
     @abstractmethod
     def health_check(self) -> dict:
         raise NotImplementedError

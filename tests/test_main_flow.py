@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from app.main import ingest_and_create_signal, execute_signal
+from app.main import ingest_and_create_signal, execute_signal, sync_pending_entries
 from app.storage.db import DB
 from app.risk.engine import kill_switch
 from app.execution.broker_base import OrderResult
@@ -35,8 +35,8 @@ class TestMainFlow(unittest.TestCase):
         bundle = ingest_and_create_signal(self.db)
         self.assertIsNotNone(bundle)
 
-        ok = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
-        self.assertTrue(ok)
+        status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
+        self.assertEqual(status, "FILLED")
 
         cur = self.db.conn.cursor()
         cur.execute("select status, exit_reason_code from positions order by position_id desc limit 1")
@@ -62,8 +62,8 @@ class TestMainFlow(unittest.TestCase):
         self.db.conn.execute("update risk_state set trading_enabled=0 where trade_date=?", (trade_date,))
         self.db.commit()
 
-        ok = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
-        self.assertFalse(ok)
+        status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
+        self.assertEqual(status, "BLOCKED")
 
         cur = self.db.conn.cursor()
         cur.execute("select count(*) from orders")
@@ -74,8 +74,8 @@ class TestMainFlow(unittest.TestCase):
         self.assertIsNotNone(bundle)
         kill_switch.on()
 
-        ok = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
-        self.assertFalse(ok)
+        status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
+        self.assertEqual(status, "BLOCKED")
 
         cur = self.db.conn.cursor()
         cur.execute("select count(*) from orders")
@@ -86,9 +86,9 @@ class TestMainFlow(unittest.TestCase):
         self.assertIsNotNone(bundle)
 
         with patch("app.main.PaperBroker.send_order", return_value=OrderResult(status="REJECTED", filled_qty=0, avg_price=0, reason_code="SIM_REJECT")):
-            ok = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
+            status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
 
-        self.assertFalse(ok)
+        self.assertEqual(status, "BLOCKED")
         cur = self.db.conn.cursor()
         cur.execute("select count(*) from orders")
         self.assertEqual(cur.fetchone()[0], 0)  # rolled back tx #2
@@ -107,9 +107,9 @@ class TestMainFlow(unittest.TestCase):
                 broker_order_id="ABC",
             ),
         ):
-            ok = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
+            status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
 
-        self.assertTrue(ok)
+        self.assertEqual(status, "PENDING")
         cur = self.db.conn.cursor()
         cur.execute("select status from positions order by position_id desc limit 1")
         self.assertEqual(cur.fetchone()[0], "PENDING_ENTRY")
@@ -117,6 +117,30 @@ class TestMainFlow(unittest.TestCase):
         row = cur.fetchone()
         self.assertEqual(row[0], "SENT")
         self.assertEqual(row[1], "ABC")
+
+    def test_sync_pending_entries_fills_order(self) -> None:
+        bundle = ingest_and_create_signal(self.db)
+        self.assertIsNotNone(bundle)
+
+        with patch(
+            "app.main.PaperBroker.send_order",
+            return_value=OrderResult(status="SENT", filled_qty=0, avg_price=0, broker_order_id="ABC"),
+        ):
+            status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
+        self.assertEqual(status, "PENDING")
+
+        with patch(
+            "app.main.PaperBroker.inquire_order",
+            return_value=OrderResult(status="FILLED", filled_qty=1, avg_price=83500.0, broker_order_id="ABC"),
+        ):
+            changed = sync_pending_entries(self.db)
+        self.assertGreaterEqual(changed, 1)
+
+        cur = self.db.conn.cursor()
+        cur.execute("select status from positions order by position_id desc limit 1")
+        self.assertEqual(cur.fetchone()[0], "OPEN")
+        cur.execute("select status from orders where side='BUY' order by id desc limit 1")
+        self.assertEqual(cur.fetchone()[0], "FILLED")
 
 
 if __name__ == "__main__":

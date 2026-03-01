@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import TypedDict
+from typing import TypedDict, Literal
 
 from app.ingestion.news_feed import sample_news, build_hash
 from app.nlp.ticker_mapper import map_ticker, MappingResult
@@ -18,6 +18,9 @@ from app.config import settings
 class SignalBundle(TypedDict):
     signal_id: int
     ticker: str
+
+
+ExecStatus = Literal["FILLED", "PENDING", "BLOCKED"]
 
 
 def _build_broker():
@@ -127,8 +130,129 @@ def ingest_and_create_signal(db: DB) -> SignalBundle | None:
         raise
 
 
-def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> bool:
-    """Tx #2 + Tx #3: risk gate, order/position lifecycle, and close simulation."""
+def _sync_entry_order_once(
+    db: DB,
+    broker,
+    *,
+    position_id: int,
+    signal_id: int,
+    order_id: int,
+    ticker: str,
+    qty: float,
+    broker_order_id: str | None,
+) -> ExecStatus:
+    if not broker_order_id:
+        return "PENDING"
+
+    status = broker.inquire_order(broker_order_id=broker_order_id, ticker=ticker, side="BUY")
+    if status is None:
+        return "PENDING"
+
+    db.begin()
+    try:
+        if status.status == "FILLED":
+            db.update_order_filled(
+                order_id=order_id,
+                price=float(status.avg_price or 0.0),
+                broker_order_id=broker_order_id,
+                autocommit=False,
+            )
+            db.set_position_open(
+                position_id=position_id,
+                avg_entry_price=float(status.avg_price or 0.0),
+                opened_value=float(status.avg_price or 0.0) * qty,
+                autocommit=False,
+            )
+            entry_key = f"entry:{position_id}:{order_id}"
+            db.insert_position_event(
+                position_id=position_id,
+                event_type="ENTRY",
+                action="EXECUTED",
+                reason_code="ENTRY_FILLED",
+                detail_json=json.dumps(
+                    {
+                        "signal_id": signal_id,
+                        "order_id": order_id,
+                        "filled_qty": status.filled_qty,
+                        "avg_price": status.avg_price,
+                    }
+                ),
+                idempotency_key=entry_key,
+                autocommit=False,
+            )
+            db.commit()
+            log_and_notify(
+                f"ORDER_FILLED:{ticker}@{status.avg_price} "
+                f"(signal_id={signal_id}, position_id={position_id})"
+            )
+            return "FILLED"
+
+        if status.status in {"REJECTED", "CANCELLED", "EXPIRED"}:
+            db.update_order_status(
+                order_id=order_id,
+                status=status.status,
+                broker_order_id=broker_order_id,
+                autocommit=False,
+            )
+            db.set_position_cancelled(position_id=position_id, reason_code=status.reason_code or status.status, autocommit=False)
+            db.insert_position_event(
+                position_id=position_id,
+                event_type="BLOCK",
+                action="BLOCKED",
+                reason_code=status.reason_code or status.status,
+                detail_json=json.dumps({"signal_id": signal_id, "order_id": order_id}),
+                idempotency_key=f"block:{position_id}:{order_id}",
+                autocommit=False,
+            )
+            db.commit()
+            log_and_notify(f"BLOCKED:{status.reason_code or status.status}")
+            return "BLOCKED"
+
+        # SENT/NEW/PARTIAL_FILLED
+        db.update_order_status(
+            order_id=order_id,
+            status=status.status,
+            broker_order_id=broker_order_id,
+            autocommit=False,
+        )
+        db.commit()
+        return "PENDING"
+    except Exception:
+        db.rollback()
+        raise
+
+
+def sync_pending_entries(db: DB, limit: int = 100) -> int:
+    """재시작/주기 동기화: PENDING_ENTRY 주문의 체결 상태를 동기화."""
+    broker = _build_broker()
+    rows = db.get_pending_entry_orders(limit=limit)
+    changed = 0
+    for row in rows:
+        prev_order_status = row.get("status")
+        prev_pos_status = row.get("position_status")
+        rs = _sync_entry_order_once(
+            db,
+            broker,
+            position_id=int(row["position_id"]),
+            signal_id=int(row["signal_id"]),
+            order_id=int(row["order_id"]),
+            ticker=str(row["ticker"]),
+            qty=float(row["qty"]),
+            broker_order_id=row.get("broker_order_id"),
+        )
+        if rs != "PENDING" or prev_order_status != "SENT" or prev_pos_status != "PENDING_ENTRY":
+            changed += 1
+    return changed
+
+
+def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> ExecStatus:
+    """Tx #2 + Tx #3: risk gate, order/position lifecycle, and close simulation.
+
+    Returns:
+      - "FILLED": 진입 체결 및 (데모 모드) 청산까지 완료
+      - "PENDING": 주문 접수만 완료(미체결)
+      - "BLOCKED": 리스크/주문 거부로 실행 차단
+    """
     trade_date = datetime.now().date().isoformat()
 
     db.begin()
@@ -138,13 +262,13 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
         if not rs:
             db.rollback()
             log_and_notify("BLOCKED:RISK_STATE_MISSING")
-            return False
+            return "BLOCKED"
 
         risk = can_trade(account_state=rs)
         if not risk.allowed:
             db.rollback()
             log_and_notify(f"BLOCKED:{risk.reason_code}")
-            return False
+            return "BLOCKED"
 
         position_id = db.create_position(ticker, signal_id, qty, autocommit=False)
         order_id = db.insert_order(
@@ -183,7 +307,19 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
                 f"ORDER_SENT_PENDING:{ticker} "
                 f"(signal_id={signal_id}, position_id={position_id}, order_id={order_id}, broker_order_id={result.broker_order_id or '-'})"
             )
-            return True
+            sync_result = _sync_entry_order_once(
+                db,
+                broker,
+                position_id=position_id,
+                signal_id=signal_id,
+                order_id=order_id,
+                ticker=ticker,
+                qty=qty,
+                broker_order_id=result.broker_order_id,
+            )
+            if sync_result == "FILLED":
+                return "FILLED"
+            return "PENDING"
 
         if result.status != "FILLED":
             db.insert_position_event(
@@ -197,7 +333,7 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
             )
             db.rollback()
             log_and_notify(f"BLOCKED:{result.reason_code or 'ORDER_NOT_FILLED'}")
-            return False
+            return "BLOCKED"
 
         db.update_order_filled(
             order_id=order_id,
@@ -270,7 +406,7 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
         )
         db.commit()
         log_and_notify(f"POSITION_CLOSED:{position_id} reason=TIME_EXIT")
-        return True
+        return "FILLED"
     except Exception:
         db.rollback()
         raise
@@ -279,6 +415,7 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
 def run_happy_path_demo() -> None:
     with DB("stock_trader.db") as db:
         db.init()
+        sync_pending_entries(db)
         bundle = ingest_and_create_signal(db)
         if not bundle:
             return

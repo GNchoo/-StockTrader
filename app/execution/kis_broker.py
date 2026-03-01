@@ -1,6 +1,7 @@
 import json
 from dataclasses import dataclass
 from typing import Any
+from datetime import datetime
 
 import requests
 
@@ -133,6 +134,72 @@ class KISBroker(BrokerBase):
             reason_code=f"ORDER_ACCEPTED:{ord_no}" if ord_no else "ORDER_ACCEPTED",
             broker_order_id=str(ord_no) if ord_no else None,
         )
+
+    def inquire_order(self, broker_order_id: str, ticker: str, side: str = "BUY") -> OrderResult | None:
+        """주문 체결 상태 조회 (best-effort).
+
+        참고: KIS 계좌조회 API 응답 포맷은 계좌/상품/모드에 따라 달라질 수 있어
+        필드 파싱은 방어적으로 처리한다.
+        """
+        if not broker_order_id:
+            return None
+
+        cano, prdt = self._split_account()
+        today = datetime.now().strftime("%Y%m%d")
+        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+        params = {
+            "CANO": cano,
+            "ACNT_PRDT_CD": prdt,
+            "INQR_STRT_DT": today,
+            "INQR_END_DT": today,
+            "SLL_BUY_DVSN_CD": "00",
+            "INQR_DVSN": "00",
+            "PDNO": ticker,
+            "CCLD_DVSN": "00",
+            "ORD_GNO_BRNO": "",
+            "ODNO": str(broker_order_id),
+            "INQR_DVSN_3": "00",
+            "INQR_DVSN_1": "",
+        }
+        headers = {
+            **self._auth_header(),
+            "appkey": settings.kis_app_key,
+            "appsecret": settings.kis_app_secret,
+            "tr_id": "VTTC8001R" if self.mode == "paper" else "TTTC8001R",
+            "custtype": "P",
+        }
+
+        try:
+            r = self.session.get(url, headers=headers, params=params, timeout=8)
+            if not r.ok:
+                return None
+            data = r.json() if r.text else {}
+        except Exception:
+            return None
+
+        rows = []
+        if isinstance(data, dict):
+            rows = data.get("output1") or data.get("output") or []
+        if not isinstance(rows, list):
+            return None
+
+        row = None
+        for item in rows:
+            if str(item.get("odno") or item.get("ODNO") or "") == str(broker_order_id):
+                row = item
+                break
+        if not row:
+            return None
+
+        ord_qty = float(row.get("ord_qty") or row.get("ORD_QTY") or 0)
+        ccld_qty = float(row.get("tot_ccld_qty") or row.get("TOT_CCLD_QTY") or row.get("ccld_qty") or 0)
+        avg_price = float(row.get("avg_prvs") or row.get("avg_pric") or row.get("AVG_PRIC") or row.get("tot_ccld_unpr") or 0)
+
+        if ccld_qty <= 0:
+            return OrderResult(status="SENT", filled_qty=0, avg_price=0.0, broker_order_id=str(broker_order_id))
+        if ord_qty > 0 and ccld_qty < ord_qty:
+            return OrderResult(status="PARTIAL_FILLED", filled_qty=ccld_qty, avg_price=avg_price, broker_order_id=str(broker_order_id))
+        return OrderResult(status="FILLED", filled_qty=ccld_qty or ord_qty, avg_price=avg_price, broker_order_id=str(broker_order_id))
 
     def health_check(self) -> dict:
         has_keys = bool(settings.kis_app_key and settings.kis_app_secret)

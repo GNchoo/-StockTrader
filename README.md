@@ -50,8 +50,10 @@ PYTHONPATH=. python3 -m app.main
 
 예상 출력(예시):
 ```text
-ORDER_FILLED:005930@83500.0 (signal_id=1, position_id=1, entry_event_id=1)
-POSITION_CLOSED:1 reason=TIME_EXIT
+ORDER_SENT_PENDING:005930 (signal_id=..., position_id=..., order_id=..., broker_order_id=...)
+# 또는 즉시 체결 시
+ORDER_FILLED:005930@83500.0 (signal_id=..., position_id=...)
+POSITION_CLOSED:... reason=TIME_EXIT
 ```
 
 중복 실행 시:

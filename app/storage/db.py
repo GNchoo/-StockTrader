@@ -330,6 +330,21 @@ class DB:
         if autocommit:
             self.conn.commit()
 
+    def set_position_cancelled(self, position_id: int, reason_code: str, autocommit: bool = True) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            update positions
+            set status='CANCELLED', closed_at=current_timestamp, exit_reason_code=?
+            where position_id=? and status='PENDING_ENTRY'
+            """,
+            (reason_code, position_id),
+        )
+        if cur.rowcount == 0:
+            raise IllegalTransitionError(f"Invalid transition to CANCELLED for position_id={position_id}")
+        if autocommit:
+            self.conn.commit()
+
     def insert_order(
         self,
         position_id: int,
@@ -367,9 +382,17 @@ class DB:
             update orders
             set status=?, broker_order_id=coalesce(?, broker_order_id)
             where id=?
+              and status not in ('FILLED','CANCELLED','REJECTED','EXPIRED')
             """,
             (status, broker_order_id, order_id),
         )
+        if cur.rowcount == 0:
+            chk = self.conn.execute("select status from orders where id=?", (order_id,)).fetchone()
+            current = chk[0] if chk else None
+            if current != status:
+                raise IllegalTransitionError(
+                    f"Invalid order status transition for order_id={order_id}: {current} -> {status}"
+                )
         if autocommit:
             self.conn.commit()
 
@@ -385,12 +408,33 @@ class DB:
             """
             update orders
             set status='FILLED', price=?, filled_at=current_timestamp, broker_order_id=coalesce(?, broker_order_id)
-            where id=?
+            where id=? and status in ('NEW','SENT','PARTIAL_FILLED')
             """,
             (price, broker_order_id, order_id),
         )
+        if cur.rowcount == 0:
+            raise IllegalTransitionError(f"Invalid transition to FILLED for order_id={order_id}")
         if autocommit:
             self.conn.commit()
+
+    def get_pending_entry_orders(self, limit: int = 100) -> list[dict[str, Any]]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            select o.id as order_id, o.position_id, o.signal_id, o.ticker, o.side, o.qty, o.status, o.broker_order_id,
+                   p.status as position_status
+            from orders o
+            join positions p on p.position_id = o.position_id
+            where p.status='PENDING_ENTRY'
+              and o.side='BUY'
+              and o.status in ('NEW','SENT','PARTIAL_FILLED')
+            order by o.sent_at asc, o.id asc
+            limit ?
+            """,
+            (int(limit),),
+        )
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
 
     def insert_position_event(
         self,
