@@ -16,7 +16,20 @@
 ```bash
 cd stock_trader
 cp .env.example .env
-python3 -m app.main
+./scripts/preflight.sh
+./scripts/run_demo.sh
+```
+
+중복 뉴스 상태와 무관하게 E2E 주문 플로우를 강제로 1회 검증하려면:
+```bash
+cd stock_trader
+./scripts/dryrun_fresh.sh
+```
+
+(동일 명령 수동 실행)
+```bash
+cd stock_trader
+PYTHONPATH=. python3 -m app.main
 ```
 
 환경 변수는 `.env`(또는 로컬 전용 `.env.local`)에 설정하세요.
@@ -48,7 +61,7 @@ DUP_NEWS_SKIPPED
 ## 테스트
 ```bash
 cd stock_trader
-python3 -m unittest discover -s tests -v
+./scripts/run_tests.sh
 ```
 
 ## 다음 작업(P1)
