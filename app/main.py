@@ -1180,24 +1180,12 @@ def _collect_current_prices(db: DB, broker, limit: int = 100) -> dict[str, float
 
 
 def run_happy_path_demo() -> None:
+    # local import to avoid circular dependency (scheduler -> main)
+    from app.scheduler.exit_runner import run_exit_cycle
+
     with DB("stock_trader.db") as db:
         db.init()
-        pol = db.get_exit_policy()
-        sync_pending_entries(db)
-        trigger_opposite_signal_exit_orders(
-            db,
-            exit_score_threshold=float(pol.get("opposite_exit_score_threshold", 70.0)),
-        )
-        broker = _build_broker()
-        current_prices = _collect_current_prices(db, broker)
-        trigger_trailing_stop_orders(
-            db,
-            current_prices=current_prices,
-            trailing_arm_pct=float(pol.get("trailing_arm_pct", 0.005)),
-            trailing_gap_pct=float(pol.get("trailing_gap_pct", 0.003)),
-        )
-        trigger_time_exit_orders(db, max_hold_min=int(pol.get("time_exit_min", 15)))
-        sync_pending_exits(db)
+        run_exit_cycle(db)
         bundle = ingest_and_create_signal(db)
         if not bundle:
             return

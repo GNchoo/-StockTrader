@@ -8,7 +8,8 @@
 - 트랜잭션 분리 메인 플로우
   - Tx#1: 뉴스 수집/매핑/신호 저장
   - Tx#2: 리스크 게이트/주문/포지션 OPEN
-  - Tx#3: 샘플 청산(OPEN -> CLOSED)
+  - Tx#3: (옵션) 데모 샘플 청산(OPEN -> CLOSED)
+- Exit 스케줄 사이클 분리: `app/scheduler/exit_runner.py`
 - 텔레그램 로그 알림 (`app/monitor/telegram_logger.py`)
 - 테스트 10종 (lifecycle/risk/main flow)
 
