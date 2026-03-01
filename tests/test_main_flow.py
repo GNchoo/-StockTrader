@@ -188,6 +188,37 @@ class TestMainFlow(unittest.TestCase):
         with self.assertRaises(IllegalTransitionError):
             self.db.update_order_status(order_id=order_id, status="SENT", broker_order_id="ABC")
 
+    def test_sync_pending_entries_retries_stale_order(self) -> None:
+        bundle = ingest_and_create_signal(self.db)
+        self.assertIsNotNone(bundle)
+
+        with patch(
+            "app.main.PaperBroker.send_order",
+            return_value=OrderResult(status="SENT", filled_qty=0, avg_price=0, broker_order_id="ABC"),
+        ):
+            status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
+        self.assertEqual(status, "PENDING")
+
+        # retry interval 경과 시뮬레이션
+        self.db.conn.execute("update orders set sent_at = datetime('now','-120 seconds') where side='BUY'")
+        self.db.conn.commit()
+
+        with patch("app.main.PaperBroker.inquire_order", return_value=None), patch(
+            "app.main.PaperBroker.send_order",
+            return_value=OrderResult(status="SENT", filled_qty=0, avg_price=0, broker_order_id="DEF"),
+        ):
+            changed = sync_pending_entries(self.db)
+        self.assertGreaterEqual(changed, 1)
+
+        cur = self.db.conn.cursor()
+        cur.execute("select status, attempt_no, broker_order_id from orders where side='BUY' order by id")
+        rows = cur.fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][0], "EXPIRED")
+        self.assertEqual(rows[1][0], "SENT")
+        self.assertEqual(rows[1][1], 2)
+        self.assertEqual(rows[1][2], "DEF")
+
 
 if __name__ == "__main__":
     unittest.main()

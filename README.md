@@ -74,3 +74,5 @@ cd stock_trader
 ## 완료된 항목
 - scorer 가중치 `parameter_registry` 연동
 - 상태 전이 가드 강화(IllegalTransitionError)
+- 주문 ACK/FILL 분리 + `sync_pending_entries` 동기화
+- retry_policy(`max_attempts_per_signal`, `min_retry_interval_sec`) 적용

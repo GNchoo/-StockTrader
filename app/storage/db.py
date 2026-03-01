@@ -173,6 +173,12 @@ class DB:
             values('score_weights', '{"impact":0.30,"source_reliability":0.20,"novelty":0.20,"market_reaction":0.15,"liquidity":0.15}', 'global', 0, null, 'v1.2.3 base')
             """
         )
+        cur.execute(
+            """
+            insert or ignore into parameter_registry(name, value_json, scope, tune_required, target_phase, rationale)
+            values('retry_policy', '{"max_attempts_per_signal":2,"min_retry_interval_sec":30}', 'global', 0, null, 'v1.2.3 base')
+            """
+        )
         self.conn.commit()
 
     def ensure_risk_state_today(self, trade_date: str, autocommit: bool = True) -> None:
@@ -213,6 +219,21 @@ class DB:
             return {k: float(raw[k]) for k in keys}
         except Exception:
             return None
+
+    def get_retry_policy(self) -> dict[str, int]:
+        raw = self.get_parameter("retry_policy") or {}
+        try:
+            max_attempts = int(raw.get("max_attempts_per_signal", 2) or 2)
+        except Exception:
+            max_attempts = 2
+        try:
+            min_retry_sec = int(raw.get("min_retry_interval_sec", 30) or 30)
+        except Exception:
+            min_retry_sec = 30
+        return {
+            "max_attempts_per_signal": max(1, max_attempts),
+            "min_retry_interval_sec": max(1, min_retry_sec),
+        }
 
     def insert_news_if_new(self, item: dict[str, Any], autocommit: bool = True) -> int | None:
         cur = self.conn.cursor()
@@ -355,15 +376,16 @@ class DB:
         order_type: str,
         status: str,
         price: float | None,
+        attempt_no: int = 1,
         autocommit: bool = True,
     ) -> int:
         cur = self.conn.cursor()
         cur.execute(
             """
-            insert into orders(position_id,signal_id,ticker,side,qty,order_type,status,price)
-            values(?,?,?,?,?,?,?,?)
+            insert into orders(position_id,signal_id,ticker,side,qty,order_type,status,price,attempt_no)
+            values(?,?,?,?,?,?,?,?,?)
             """,
-            (position_id, signal_id, ticker, side, qty, order_type, status, price),
+            (position_id, signal_id, ticker, side, qty, order_type, status, price, int(attempt_no or 1)),
         )
         if autocommit:
             self.conn.commit()
@@ -422,6 +444,7 @@ class DB:
         cur.execute(
             """
             select o.id as order_id, o.position_id, o.signal_id, o.ticker, o.side, o.qty, o.status, o.broker_order_id,
+                   o.attempt_no, o.sent_at,
                    p.status as position_status
             from orders o
             join positions p on p.position_id = o.position_id
