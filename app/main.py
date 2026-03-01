@@ -170,6 +170,21 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
             )
         )
 
+        # 주문 접수(ACK)와 체결(FILL) 분리 처리
+        if result.status in {"SENT", "NEW", "PARTIAL_FILLED"}:
+            db.update_order_status(
+                order_id=order_id,
+                status=result.status,
+                broker_order_id=result.broker_order_id,
+                autocommit=False,
+            )
+            db.commit()
+            log_and_notify(
+                f"ORDER_SENT_PENDING:{ticker} "
+                f"(signal_id={signal_id}, position_id={position_id}, order_id={order_id}, broker_order_id={result.broker_order_id or '-'})"
+            )
+            return True
+
         if result.status != "FILLED":
             db.insert_position_event(
                 position_id=position_id,
@@ -184,7 +199,12 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> boo
             log_and_notify(f"BLOCKED:{result.reason_code or 'ORDER_NOT_FILLED'}")
             return False
 
-        db.update_order_filled(order_id=order_id, price=result.avg_price, autocommit=False)
+        db.update_order_filled(
+            order_id=order_id,
+            price=result.avg_price,
+            broker_order_id=result.broker_order_id,
+            autocommit=False,
+        )
         db.set_position_open(
             position_id=position_id,
             avg_entry_price=result.avg_price,

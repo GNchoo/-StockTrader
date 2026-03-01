@@ -14,7 +14,12 @@ class PaperBroker(BrokerBase):
         time.sleep(latency / 1000)
         # P0: use caller-provided expected_price when available
         mock_price = req.expected_price if req.expected_price is not None else 100.0
-        return OrderResult(status="FILLED", filled_qty=req.qty, avg_price=float(mock_price))
+        return OrderResult(
+            status="FILLED",
+            filled_qty=req.qty,
+            avg_price=float(mock_price),
+            broker_order_id=f"PAPER-{int(time.time()*1000)}",
+        )
 
     def health_check(self) -> dict:
         return {"status": "OK", "latency_ms": self.base_latency_ms, "checks": {"broker": "paper"}}

@@ -115,8 +115,8 @@ class KISBroker(BrokerBase):
     def send_order(self, req: OrderRequest) -> OrderResult:
         """주문 전송.
 
-        현재 단계에서는 주문 접수 성공(rt_cd==0) 시 FILLED로 간주해
-        파이프라인을 유지합니다. 체결조회 연동은 후속 단계에서 보강.
+        실거래에서 주문 접수(ACK)와 체결(FILL)을 분리한다.
+        rt_cd==0은 주문 접수 성공으로만 처리하며 status='SENT'를 반환한다.
         """
         data = self._order_cash(req)
         rt_cd = str(data.get("rt_cd", ""))
@@ -126,12 +126,12 @@ class KISBroker(BrokerBase):
 
         out = data.get("output", {}) if isinstance(data, dict) else {}
         ord_no = out.get("ODNO") or out.get("odno") or ""
-        avg = float(req.expected_price or 0.0)
         return OrderResult(
-            status="FILLED",
-            filled_qty=max(1, int(round(req.qty))),
-            avg_price=avg,
+            status="SENT",
+            filled_qty=0,
+            avg_price=0.0,
             reason_code=f"ORDER_ACCEPTED:{ord_no}" if ord_no else "ORDER_ACCEPTED",
+            broker_order_id=str(ord_no) if ord_no else None,
         )
 
     def health_check(self) -> dict:

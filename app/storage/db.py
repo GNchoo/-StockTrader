@@ -354,14 +354,40 @@ class DB:
             self.conn.commit()
         return int(cur.lastrowid)
 
-    def update_order_filled(self, order_id: int, price: float, autocommit: bool = True) -> None:
+    def update_order_status(
+        self,
+        order_id: int,
+        status: str,
+        broker_order_id: str | None = None,
+        autocommit: bool = True,
+    ) -> None:
         cur = self.conn.cursor()
         cur.execute(
             """
-            update orders set status='FILLED', price=?, filled_at=current_timestamp
+            update orders
+            set status=?, broker_order_id=coalesce(?, broker_order_id)
             where id=?
             """,
-            (price, order_id),
+            (status, broker_order_id, order_id),
+        )
+        if autocommit:
+            self.conn.commit()
+
+    def update_order_filled(
+        self,
+        order_id: int,
+        price: float,
+        broker_order_id: str | None = None,
+        autocommit: bool = True,
+    ) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            update orders
+            set status='FILLED', price=?, filled_at=current_timestamp, broker_order_id=coalesce(?, broker_order_id)
+            where id=?
+            """,
+            (price, broker_order_id, order_id),
         )
         if autocommit:
             self.conn.commit()

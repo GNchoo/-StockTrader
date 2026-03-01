@@ -18,6 +18,7 @@ class OrderResult:
     filled_qty: float
     avg_price: float
     reason_code: str | None = None
+    broker_order_id: str | None = None
 
 
 class BrokerBase(ABC):

@@ -44,6 +44,7 @@ PYTHONPATH=. python3 -m app.main
 - `KISBroker`는 현재 다음을 지원합니다.
   - OAuth 토큰 발급
   - 현금주문 API 호출(매수/매도)
+  - 주문 접수(ACK) 상태 반환 (`SENT`)
   - 헬스체크(OK/WARN/CRITICAL)
 - 체결조회/정정/취소/정산 반영은 다음 단계에서 확장 예정입니다.
 

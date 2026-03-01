@@ -93,6 +93,31 @@ class TestMainFlow(unittest.TestCase):
         cur.execute("select count(*) from orders")
         self.assertEqual(cur.fetchone()[0], 0)  # rolled back tx #2
 
+    def test_execute_signal_order_sent_pending(self) -> None:
+        bundle = ingest_and_create_signal(self.db)
+        self.assertIsNotNone(bundle)
+
+        with patch(
+            "app.main.PaperBroker.send_order",
+            return_value=OrderResult(
+                status="SENT",
+                filled_qty=0,
+                avg_price=0,
+                reason_code="ORDER_ACCEPTED:ABC",
+                broker_order_id="ABC",
+            ),
+        ):
+            ok = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
+
+        self.assertTrue(ok)
+        cur = self.db.conn.cursor()
+        cur.execute("select status from positions order by position_id desc limit 1")
+        self.assertEqual(cur.fetchone()[0], "PENDING_ENTRY")
+        cur.execute("select status, broker_order_id from orders order by id desc limit 1")
+        row = cur.fetchone()
+        self.assertEqual(row[0], "SENT")
+        self.assertEqual(row[1], "ABC")
+
 
 if __name__ == "__main__":
     unittest.main()

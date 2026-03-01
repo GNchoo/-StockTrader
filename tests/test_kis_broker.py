@@ -19,9 +19,10 @@ class TestKISBroker(unittest.TestCase):
         b._order_cash = lambda req: {"rt_cd": "0", "output": {"ODNO": "12345"}}  # type: ignore[attr-defined]
         req = OrderRequest(signal_id=1, ticker="005930", side="BUY", qty=1, expected_price=83500)
         out = b.send_order(req)
-        self.assertEqual(out.status, "FILLED")
-        self.assertEqual(out.filled_qty, 1)
-        self.assertEqual(out.avg_price, 83500)
+        self.assertEqual(out.status, "SENT")
+        self.assertEqual(out.filled_qty, 0)
+        self.assertEqual(out.avg_price, 0.0)
+        self.assertEqual(out.broker_order_id, "12345")
         self.assertTrue((out.reason_code or "").startswith("ORDER_ACCEPTED"))
 
     def test_send_order_maps_reject_response(self):
