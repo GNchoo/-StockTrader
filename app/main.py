@@ -208,7 +208,34 @@ def _sync_entry_order_once(
             log_and_notify(f"BLOCKED:{status.reason_code or status.status}")
             return "BLOCKED"
 
-        # SENT/NEW/PARTIAL_FILLED
+        # PARTIAL_FILLED는 평균가를 기록하고 유지
+        if status.status == "PARTIAL_FILLED":
+            db.update_order_partial(
+                order_id=order_id,
+                price=float(status.avg_price or 0.0),
+                broker_order_id=broker_order_id,
+                autocommit=False,
+            )
+            db.insert_position_event(
+                position_id=position_id,
+                event_type="ADD",
+                action="EXECUTED",
+                reason_code="PARTIAL_FILLED",
+                detail_json=json.dumps(
+                    {
+                        "signal_id": signal_id,
+                        "order_id": order_id,
+                        "filled_qty": status.filled_qty,
+                        "avg_price": status.avg_price,
+                    }
+                ),
+                idempotency_key=f"partial:{position_id}:{order_id}:{int(float(status.filled_qty or 0)*10000)}",
+                autocommit=False,
+            )
+            db.commit()
+            return "PENDING"
+
+        # SENT/NEW
         db.update_order_status(
             order_id=order_id,
             status=status.status,
@@ -273,6 +300,11 @@ def sync_pending_entries(db: DB, limit: int = 100) -> int:
         )
 
         if rs == "PENDING":
+            # 부분체결 상태는 재주문하지 않고 체결 동기화만 유지
+            current_status = db.get_order_status(order_id) or str(row.get("status") or "")
+            if current_status == "PARTIAL_FILLED":
+                continue
+
             sent_at = _parse_sqlite_ts(row.get("sent_at"))
             age_sec = (now - sent_at).total_seconds() if sent_at else 10**9
 
@@ -373,24 +405,29 @@ def sync_pending_entries(db: DB, limit: int = 100) -> int:
                             )
                             changed += 1
                         else:
+                            reason = new_result.reason_code or "ORDER_REJECTED"
+                            prev_reason = db.get_latest_block_reason(position_id)
+                            if prev_reason and prev_reason == reason:
+                                reason = "RETRY_BLOCKED_SAME_CONDITION"
+
                             db.update_order_status(
                                 order_id=new_order_id,
                                 status=new_result.status,
                                 broker_order_id=new_result.broker_order_id,
                                 autocommit=False,
                             )
-                            db.set_position_cancelled(position_id=position_id, reason_code=new_result.reason_code or "ORDER_REJECTED", autocommit=False)
+                            db.set_position_cancelled(position_id=position_id, reason_code=reason, autocommit=False)
                             db.insert_position_event(
                                 position_id=position_id,
                                 event_type="BLOCK",
                                 action="BLOCKED",
-                                reason_code=new_result.reason_code or "ORDER_REJECTED",
-                                detail_json=json.dumps({"signal_id": signal_id, "order_id": new_order_id}),
+                                reason_code=reason,
+                                detail_json=json.dumps({"signal_id": signal_id, "order_id": new_order_id, "original_reason": new_result.reason_code}),
                                 idempotency_key=f"block:{position_id}:{new_order_id}",
                                 autocommit=False,
                             )
                             db.commit()
-                            log_and_notify(f"BLOCKED:{new_result.reason_code or 'ORDER_REJECTED'}")
+                            log_and_notify(f"BLOCKED:{reason}")
                             changed += 1
                     except Exception:
                         db.rollback()

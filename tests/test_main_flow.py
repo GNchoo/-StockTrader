@@ -219,6 +219,37 @@ class TestMainFlow(unittest.TestCase):
         self.assertEqual(rows[1][1], 2)
         self.assertEqual(rows[1][2], "DEF")
 
+    def test_sync_pending_entries_partial_fill_no_retry(self) -> None:
+        bundle = ingest_and_create_signal(self.db)
+        self.assertIsNotNone(bundle)
+
+        with patch(
+            "app.main.PaperBroker.send_order",
+            return_value=OrderResult(status="SENT", filled_qty=0, avg_price=0, broker_order_id="ABC"),
+        ):
+            status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
+        self.assertEqual(status, "PENDING")
+
+        # retry interval 경과 + partial fill 상태
+        self.db.conn.execute("update orders set sent_at = datetime('now','-120 seconds') where side='BUY'")
+        self.db.conn.commit()
+
+        with patch(
+            "app.main.PaperBroker.inquire_order",
+            return_value=OrderResult(status="PARTIAL_FILLED", filled_qty=0.4, avg_price=83400.0, broker_order_id="ABC"),
+        ), patch("app.main.PaperBroker.send_order") as send_mock:
+            changed = sync_pending_entries(self.db)
+        self.assertEqual(send_mock.call_count, 0)
+        self.assertGreaterEqual(changed, 0)
+
+        cur = self.db.conn.cursor()
+        cur.execute("select count(*) from orders where side='BUY'")
+        self.assertEqual(cur.fetchone()[0], 1)
+        cur.execute("select status, price from orders where side='BUY' order by id desc limit 1")
+        row = cur.fetchone()
+        self.assertEqual(row[0], "PARTIAL_FILLED")
+        self.assertEqual(float(row[1]), 83400.0)
+
 
 if __name__ == "__main__":
     unittest.main()

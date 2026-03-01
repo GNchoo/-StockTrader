@@ -418,6 +418,27 @@ class DB:
         if autocommit:
             self.conn.commit()
 
+    def update_order_partial(
+        self,
+        order_id: int,
+        price: float,
+        broker_order_id: str | None = None,
+        autocommit: bool = True,
+    ) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            update orders
+            set status='PARTIAL_FILLED', price=?, broker_order_id=coalesce(?, broker_order_id)
+            where id=? and status in ('NEW','SENT','PARTIAL_FILLED')
+            """,
+            (price, broker_order_id, order_id),
+        )
+        if cur.rowcount == 0:
+            raise IllegalTransitionError(f"Invalid transition to PARTIAL_FILLED for order_id={order_id}")
+        if autocommit:
+            self.conn.commit()
+
     def update_order_filled(
         self,
         order_id: int,
@@ -438,6 +459,27 @@ class DB:
             raise IllegalTransitionError(f"Invalid transition to FILLED for order_id={order_id}")
         if autocommit:
             self.conn.commit()
+
+    def get_order_status(self, order_id: int) -> str | None:
+        cur = self.conn.cursor()
+        cur.execute("select status from orders where id=?", (order_id,))
+        row = cur.fetchone()
+        return str(row[0]) if row else None
+
+    def get_latest_block_reason(self, position_id: int) -> str | None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            select reason_code
+            from position_events
+            where position_id=? and event_type='BLOCK'
+            order by id desc
+            limit 1
+            """,
+            (position_id,),
+        )
+        row = cur.fetchone()
+        return str(row[0]) if row else None
 
     def get_pending_entry_orders(self, limit: int = 100) -> list[dict[str, Any]]:
         cur = self.conn.cursor()
