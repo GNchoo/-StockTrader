@@ -11,6 +11,7 @@ from app.main import (
     sync_pending_exits,
     trigger_time_exit_orders,
     trigger_trailing_stop_orders,
+    trigger_opposite_signal_exit_orders,
 )
 from app.storage.db import DB, IllegalTransitionError
 from app.risk.engine import kill_switch
@@ -413,6 +414,42 @@ class TestMainFlow(unittest.TestCase):
                 trailing_arm_pct=0.05,
                 trailing_gap_pct=0.03,
             )
+        self.assertGreaterEqual(created, 1)
+
+        cur = self.db.conn.cursor()
+        cur.execute("select count(*) from orders where side='SELL'")
+        self.assertEqual(cur.fetchone()[0], 1)
+        cur.execute("select status from positions where position_id=?", (pos_id,))
+        self.assertEqual(cur.fetchone()[0], "PARTIAL_EXIT")
+
+    def test_trigger_opposite_signal_exit_orders_creates_sell(self) -> None:
+        self.db.begin()
+        pos_id = self.db.create_position("005930", 1, 1.0, autocommit=False)
+        self.db.set_position_open(pos_id, avg_entry_price=83500.0, opened_value=83500.0, autocommit=False)
+        # 약화 신호 삽입 (score<70)
+        self.db.insert_signal(
+            {
+                "news_id": 1,
+                "event_ticker_id": 1,
+                "ticker": "005930",
+                "raw_score": 50,
+                "total_score": 65,
+                "components": "{}",
+                "priced_in_flag": "LOW",
+                "decision": "HOLD",
+            },
+            autocommit=False,
+        )
+        self.db.commit()
+
+        with patch(
+            "app.main.PaperBroker.send_order",
+            return_value=OrderResult(status="SENT", filled_qty=0, avg_price=0.0, broker_order_id="OP-1"),
+        ), patch(
+            "app.main.PaperBroker.inquire_order",
+            return_value=OrderResult(status="PARTIAL_FILLED", filled_qty=0.5, avg_price=83450.0, broker_order_id="OP-1"),
+        ):
+            created = trigger_opposite_signal_exit_orders(self.db, exit_score_threshold=70)
         self.assertGreaterEqual(created, 1)
 
         cur = self.db.conn.cursor()

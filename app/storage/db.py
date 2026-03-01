@@ -574,6 +574,21 @@ class DB:
         row = cur.fetchone()
         return str(row[0]) if row else None
 
+    def get_latest_signal_for_ticker(self, ticker: str) -> dict[str, Any] | None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            select id, ticker, total_score, decision, created_at
+            from signal_scores
+            where ticker=?
+            order by id desc
+            limit 1
+            """,
+            (ticker,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
     def get_positions_for_exit_scan(self, limit: int = 100) -> list[dict[str, Any]]:
         cur = self.conn.cursor()
         cur.execute(

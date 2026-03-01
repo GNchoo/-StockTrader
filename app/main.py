@@ -732,6 +732,127 @@ def trigger_trailing_stop_orders(
     return created
 
 
+def trigger_opposite_signal_exit_orders(
+    db: DB,
+    *,
+    exit_score_threshold: float = 70.0,
+    limit: int = 100,
+) -> int:
+    """반대 뉴스/약화 신호 기반 청산 트리거.
+
+    최신 신호가 IGNORE/BLOCK 또는 점수 저하(total_score < threshold)면
+    보유 포지션에 SELL 주문을 생성한다.
+    """
+    broker = _build_broker()
+    created = 0
+
+    for p in db.get_positions_for_exit_scan(limit=limit):
+        if int(p.get("pending_sell_cnt") or 0) > 0:
+            continue
+
+        ticker = str(p["ticker"])
+        sig = db.get_latest_signal_for_ticker(ticker)
+        if not sig:
+            continue
+
+        decision = str(sig.get("decision") or "").upper()
+        score = float(sig.get("total_score") or 0.0)
+        should_exit = decision in {"IGNORE", "BLOCK"} or score < float(exit_score_threshold)
+        if not should_exit:
+            continue
+
+        position_id = int(p["position_id"])
+        signal_id = int(p.get("signal_id") or 0)
+        total_qty = float(p.get("qty") or 0.0)
+        exited_qty = float(p.get("exited_qty") or 0.0)
+        remain_qty = max(0.0, total_qty - exited_qty)
+        if remain_qty <= 0:
+            continue
+
+        send = broker.send_order(
+            OrderRequest(
+                signal_id=signal_id,
+                ticker=ticker,
+                side="SELL",
+                qty=remain_qty,
+                expected_price=float(p.get("avg_entry_price") or 0.0) or 83600.0,
+            )
+        )
+
+        db.begin()
+        try:
+            order_id = db.insert_order(
+                position_id=position_id,
+                signal_id=signal_id,
+                ticker=ticker,
+                side="SELL",
+                qty=remain_qty,
+                order_type="MARKET",
+                status="SENT",
+                price=None,
+                autocommit=False,
+            )
+
+            if send.status in {"SENT", "NEW", "PARTIAL_FILLED"}:
+                db.update_order_status(order_id=order_id, status=send.status, broker_order_id=send.broker_order_id, autocommit=False)
+                db.commit()
+                log_and_notify(
+                    f"EXIT_ORDER_SENT:{ticker} (position_id={position_id}, order_id={order_id}, reason=OPPOSITE_SIGNAL, decision={decision}, score={score:.1f})"
+                )
+                _sync_exit_order_once(
+                    db,
+                    broker,
+                    position_id=position_id,
+                    signal_id=signal_id,
+                    order_id=order_id,
+                    ticker=ticker,
+                    order_qty=remain_qty,
+                    broker_order_id=send.broker_order_id,
+                )
+                created += 1
+                continue
+
+            if send.status == "FILLED":
+                db.update_order_filled(
+                    order_id=order_id,
+                    price=float(send.avg_price or 0.0),
+                    filled_qty=float(send.filled_qty or remain_qty),
+                    broker_order_id=send.broker_order_id,
+                    autocommit=False,
+                )
+                db.set_position_closed(position_id=position_id, reason_code="OPPOSITE_SIGNAL", exited_qty=total_qty, autocommit=False)
+                db.insert_position_event(
+                    position_id=position_id,
+                    event_type="FULL_EXIT",
+                    action="EXECUTED",
+                    reason_code="OPPOSITE_SIGNAL",
+                    detail_json=json.dumps({"signal_id": signal_id, "order_id": order_id, "decision": decision, "score": score}),
+                    idempotency_key=f"oppo-exit:{position_id}:{order_id}",
+                    autocommit=False,
+                )
+                db.commit()
+                created += 1
+                continue
+
+            db.update_order_status(order_id=order_id, status=send.status, broker_order_id=send.broker_order_id, autocommit=False)
+            db.insert_position_event(
+                position_id=position_id,
+                event_type="BLOCK",
+                action="BLOCKED",
+                reason_code=send.reason_code or "EXIT_ORDER_REJECTED",
+                detail_json=json.dumps({"signal_id": signal_id, "order_id": order_id}),
+                idempotency_key=f"oppo-block:{position_id}:{order_id}",
+                autocommit=False,
+            )
+            db.commit()
+            created += 1
+        except Exception:
+            db.rollback()
+            raise
+
+    return created
+
+
 def trigger_time_exit_orders(db: DB, max_hold_min: int = 15, limit: int = 100) -> int:
     """시간 기반 청산 트리거: 오래된 OPEN/PARTIAL_EXIT 포지션에 SELL 주문 생성."""
     broker = _build_broker()
@@ -1021,6 +1142,7 @@ def run_happy_path_demo() -> None:
         db.init()
         pol = db.get_exit_policy()
         sync_pending_entries(db)
+        trigger_opposite_signal_exit_orders(db, exit_score_threshold=70.0)
         trigger_trailing_stop_orders(
             db,
             current_prices={},  # TODO: 실시간 시세 연동 후 주입
