@@ -154,6 +154,7 @@ def _sync_entry_order_once(
             db.update_order_filled(
                 order_id=order_id,
                 price=float(status.avg_price or 0.0),
+                filled_qty=float(status.filled_qty or qty),
                 broker_order_id=broker_order_id,
                 autocommit=False,
             )
@@ -210,9 +211,11 @@ def _sync_entry_order_once(
 
         # PARTIAL_FILLED는 평균가를 기록하고 유지
         if status.status == "PARTIAL_FILLED":
+            filled_qty = float(status.filled_qty or 0.0)
             db.update_order_partial(
                 order_id=order_id,
                 price=float(status.avg_price or 0.0),
+                filled_qty=filled_qty,
                 broker_order_id=broker_order_id,
                 autocommit=False,
             )
@@ -232,6 +235,45 @@ def _sync_entry_order_once(
                 idempotency_key=f"partial:{position_id}:{order_id}:{int(float(status.filled_qty or 0)*10000)}",
                 autocommit=False,
             )
+
+            # 누적 체결량이 주문수량에 도달하면 OPEN 전환
+            if filled_qty >= float(qty) - 1e-9:
+                db.update_order_filled(
+                    order_id=order_id,
+                    price=float(status.avg_price or 0.0),
+                    filled_qty=filled_qty,
+                    broker_order_id=broker_order_id,
+                    autocommit=False,
+                )
+                db.set_position_open(
+                    position_id=position_id,
+                    avg_entry_price=float(status.avg_price or 0.0),
+                    opened_value=float(status.avg_price or 0.0) * qty,
+                    autocommit=False,
+                )
+                db.insert_position_event(
+                    position_id=position_id,
+                    event_type="ENTRY",
+                    action="EXECUTED",
+                    reason_code="ENTRY_FILLED",
+                    detail_json=json.dumps(
+                        {
+                            "signal_id": signal_id,
+                            "order_id": order_id,
+                            "filled_qty": filled_qty,
+                            "avg_price": status.avg_price,
+                        }
+                    ),
+                    idempotency_key=f"entry:{position_id}:{order_id}",
+                    autocommit=False,
+                )
+                db.commit()
+                log_and_notify(
+                    f"ORDER_FILLED:{ticker}@{status.avg_price} "
+                    f"(signal_id={signal_id}, position_id={position_id})"
+                )
+                return "FILLED"
+
             db.commit()
             return "PENDING"
 

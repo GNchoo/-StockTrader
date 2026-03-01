@@ -115,6 +115,7 @@ class DB:
               qty real not null,
               order_type text not null check (order_type in ('MARKET','LIMIT','STOP','STOP_LIMIT')),
               price real,
+              filled_qty real not null default 0,
               status text not null check (status in ('NEW','SENT','PARTIAL_FILLED','FILLED','CANCELLED','REJECTED','EXPIRED')),
               broker_order_id text,
               attempt_no integer not null default 1,
@@ -179,6 +180,15 @@ class DB:
             values('retry_policy', '{"max_attempts_per_signal":2,"min_retry_interval_sec":30}', 'global', 0, null, 'v1.2.3 base')
             """
         )
+
+        # lightweight migration for old local sqlite files
+        try:
+            cols = [r[1] for r in self.conn.execute("pragma table_info(orders)").fetchall()]
+            if "filled_qty" not in cols:
+                self.conn.execute("alter table orders add column filled_qty real not null default 0")
+        except Exception:
+            pass
+
         self.conn.commit()
 
     def ensure_risk_state_today(self, trade_date: str, autocommit: bool = True) -> None:
@@ -422,6 +432,7 @@ class DB:
         self,
         order_id: int,
         price: float,
+        filled_qty: float,
         broker_order_id: str | None = None,
         autocommit: bool = True,
     ) -> None:
@@ -429,10 +440,13 @@ class DB:
         cur.execute(
             """
             update orders
-            set status='PARTIAL_FILLED', price=?, broker_order_id=coalesce(?, broker_order_id)
+            set status='PARTIAL_FILLED',
+                price=?,
+                filled_qty=case when ? > filled_qty then ? else filled_qty end,
+                broker_order_id=coalesce(?, broker_order_id)
             where id=? and status in ('NEW','SENT','PARTIAL_FILLED')
             """,
-            (price, broker_order_id, order_id),
+            (price, float(filled_qty or 0.0), float(filled_qty or 0.0), broker_order_id, order_id),
         )
         if cur.rowcount == 0:
             raise IllegalTransitionError(f"Invalid transition to PARTIAL_FILLED for order_id={order_id}")
@@ -443,6 +457,7 @@ class DB:
         self,
         order_id: int,
         price: float,
+        filled_qty: float | None = None,
         broker_order_id: str | None = None,
         autocommit: bool = True,
     ) -> None:
@@ -450,10 +465,14 @@ class DB:
         cur.execute(
             """
             update orders
-            set status='FILLED', price=?, filled_at=current_timestamp, broker_order_id=coalesce(?, broker_order_id)
+            set status='FILLED',
+                price=?,
+                filled_qty=coalesce(?, qty),
+                filled_at=current_timestamp,
+                broker_order_id=coalesce(?, broker_order_id)
             where id=? and status in ('NEW','SENT','PARTIAL_FILLED')
             """,
-            (price, broker_order_id, order_id),
+            (price, filled_qty, broker_order_id, order_id),
         )
         if cur.rowcount == 0:
             raise IllegalTransitionError(f"Invalid transition to FILLED for order_id={order_id}")
@@ -465,6 +484,12 @@ class DB:
         cur.execute("select status from orders where id=?", (order_id,))
         row = cur.fetchone()
         return str(row[0]) if row else None
+
+    def get_order(self, order_id: int) -> dict[str, Any] | None:
+        cur = self.conn.cursor()
+        cur.execute("select * from orders where id=?", (order_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
 
     def get_latest_block_reason(self, position_id: int) -> str | None:
         cur = self.conn.cursor()

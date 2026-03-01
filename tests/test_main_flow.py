@@ -245,10 +245,37 @@ class TestMainFlow(unittest.TestCase):
         cur = self.db.conn.cursor()
         cur.execute("select count(*) from orders where side='BUY'")
         self.assertEqual(cur.fetchone()[0], 1)
-        cur.execute("select status, price from orders where side='BUY' order by id desc limit 1")
+        cur.execute("select status, price, filled_qty from orders where side='BUY' order by id desc limit 1")
         row = cur.fetchone()
         self.assertEqual(row[0], "PARTIAL_FILLED")
         self.assertEqual(float(row[1]), 83400.0)
+        self.assertAlmostEqual(float(row[2]), 0.4)
+
+    def test_partial_fill_reaches_qty_opens_position(self) -> None:
+        bundle = ingest_and_create_signal(self.db)
+        self.assertIsNotNone(bundle)
+
+        with patch(
+            "app.main.PaperBroker.send_order",
+            return_value=OrderResult(status="SENT", filled_qty=0, avg_price=0, broker_order_id="ABC"),
+        ):
+            status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
+        self.assertEqual(status, "PENDING")
+
+        with patch(
+            "app.main.PaperBroker.inquire_order",
+            return_value=OrderResult(status="PARTIAL_FILLED", filled_qty=1.0, avg_price=83500.0, broker_order_id="ABC"),
+        ):
+            changed = sync_pending_entries(self.db)
+        self.assertGreaterEqual(changed, 1)
+
+        cur = self.db.conn.cursor()
+        cur.execute("select status from positions order by position_id desc limit 1")
+        self.assertEqual(cur.fetchone()[0], "OPEN")
+        cur.execute("select status, filled_qty from orders where side='BUY' order by id desc limit 1")
+        row = cur.fetchone()
+        self.assertEqual(row[0], "FILLED")
+        self.assertAlmostEqual(float(row[1]), 1.0)
 
     def test_retry_blocked_same_condition_reason(self) -> None:
         bundle = ingest_and_create_signal(self.db)
