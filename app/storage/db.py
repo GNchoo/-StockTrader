@@ -95,6 +95,7 @@ class DB:
               signal_id integer,
               status text not null check (status in ('PENDING_ENTRY','OPEN','PARTIAL_EXIT','CLOSED','CANCELLED')),
               qty real not null default 0,
+              exited_qty real not null default 0,
               avg_entry_price real,
               opened_value real,
               leverage real not null default 1.0,
@@ -186,6 +187,12 @@ class DB:
             cols = [r[1] for r in self.conn.execute("pragma table_info(orders)").fetchall()]
             if "filled_qty" not in cols:
                 self.conn.execute("alter table orders add column filled_qty real not null default 0")
+        except Exception:
+            pass
+        try:
+            pcols = [r[1] for r in self.conn.execute("pragma table_info(positions)").fetchall()]
+            if "exited_qty" not in pcols:
+                self.conn.execute("alter table positions add column exited_qty real not null default 0")
         except Exception:
             pass
 
@@ -346,15 +353,30 @@ class DB:
         if autocommit:
             self.conn.commit()
 
-    def set_position_closed(self, position_id: int, reason_code: str, autocommit: bool = True) -> None:
+    def set_position_partial_exit(self, position_id: int, exited_qty: float, autocommit: bool = True) -> None:
         cur = self.conn.cursor()
         cur.execute(
             """
             update positions
-            set status='CLOSED', closed_at=current_timestamp, exit_reason_code=?
-            where position_id=? and status='OPEN'
+            set status='PARTIAL_EXIT', exited_qty=?
+            where position_id=? and status in ('OPEN','PARTIAL_EXIT')
             """,
-            (reason_code, position_id),
+            (float(exited_qty or 0.0), position_id),
+        )
+        if cur.rowcount == 0:
+            raise IllegalTransitionError(f"Invalid transition to PARTIAL_EXIT for position_id={position_id}")
+        if autocommit:
+            self.conn.commit()
+
+    def set_position_closed(self, position_id: int, reason_code: str, exited_qty: float | None = None, autocommit: bool = True) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            update positions
+            set status='CLOSED', closed_at=current_timestamp, exit_reason_code=?, exited_qty=coalesce(?, exited_qty)
+            where position_id=? and status in ('OPEN','PARTIAL_EXIT')
+            """,
+            (reason_code, exited_qty, position_id),
         )
         if cur.rowcount == 0:
             raise IllegalTransitionError(f"Invalid transition to CLOSED for position_id={position_id}")
@@ -505,6 +527,26 @@ class DB:
         )
         row = cur.fetchone()
         return str(row[0]) if row else None
+
+    def get_pending_exit_orders(self, limit: int = 100) -> list[dict[str, Any]]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            select o.id as order_id, o.position_id, o.signal_id, o.ticker, o.side, o.qty, o.status, o.broker_order_id,
+                   o.attempt_no, o.sent_at,
+                   p.status as position_status, p.qty as position_qty, p.exited_qty
+            from orders o
+            join positions p on p.position_id = o.position_id
+            where p.status in ('OPEN','PARTIAL_EXIT')
+              and o.side='SELL'
+              and o.status in ('NEW','SENT','PARTIAL_FILLED')
+            order by o.sent_at asc, o.id asc
+            limit ?
+            """,
+            (int(limit),),
+        )
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
 
     def get_pending_entry_orders(self, limit: int = 100) -> list[dict[str, Any]]:
         cur = self.conn.cursor()

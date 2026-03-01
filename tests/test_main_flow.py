@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from app.main import ingest_and_create_signal, execute_signal, sync_pending_entries
+from app.main import ingest_and_create_signal, execute_signal, sync_pending_entries, sync_pending_exits
 from app.storage.db import DB, IllegalTransitionError
 from app.risk.engine import kill_switch
 from app.execution.broker_base import OrderResult
@@ -316,6 +316,50 @@ class TestMainFlow(unittest.TestCase):
         row = cur.fetchone()
         self.assertEqual(row[0], "CANCELLED")
         self.assertEqual(row[1], "RETRY_BLOCKED_SAME_CONDITION")
+
+    def test_sync_pending_exits_partial_then_full_close(self) -> None:
+        # OPEN 포지션 + SELL 대기 주문 생성
+        self.db.begin()
+        pos_id = self.db.create_position("005930", 1, 1.0, autocommit=False)
+        self.db.set_position_open(pos_id, avg_entry_price=83500.0, opened_value=83500.0, autocommit=False)
+        sell_order_id = self.db.insert_order(
+            position_id=pos_id,
+            signal_id=1,
+            ticker="005930",
+            side="SELL",
+            qty=1.0,
+            order_type="MARKET",
+            status="SENT",
+            price=None,
+            autocommit=False,
+        )
+        self.db.update_order_status(sell_order_id, "SENT", broker_order_id="S-1", autocommit=False)
+        self.db.commit()
+
+        # 1차 부분청산
+        with patch(
+            "app.main.PaperBroker.inquire_order",
+            return_value=OrderResult(status="PARTIAL_FILLED", filled_qty=0.4, avg_price=83600.0, broker_order_id="S-1"),
+        ):
+            changed = sync_pending_exits(self.db)
+        self.assertGreaterEqual(changed, 0)
+        cur = self.db.conn.cursor()
+        cur.execute("select status, exited_qty from positions where position_id=?", (pos_id,))
+        row = cur.fetchone()
+        self.assertEqual(row[0], "PARTIAL_EXIT")
+        self.assertAlmostEqual(float(row[1]), 0.4)
+
+        # 2차 전량청산
+        with patch(
+            "app.main.PaperBroker.inquire_order",
+            return_value=OrderResult(status="FILLED", filled_qty=1.0, avg_price=83650.0, broker_order_id="S-1"),
+        ):
+            changed2 = sync_pending_exits(self.db)
+        self.assertGreaterEqual(changed2, 1)
+        cur.execute("select status, exited_qty from positions where position_id=?", (pos_id,))
+        row2 = cur.fetchone()
+        self.assertEqual(row2[0], "CLOSED")
+        self.assertAlmostEqual(float(row2[1]), 1.0)
 
 
 if __name__ == "__main__":
