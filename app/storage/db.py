@@ -528,6 +528,26 @@ class DB:
         row = cur.fetchone()
         return str(row[0]) if row else None
 
+    def get_positions_for_exit_scan(self, limit: int = 100) -> list[dict[str, Any]]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            select p.position_id, p.signal_id, p.ticker, p.qty, p.exited_qty, p.status, p.opened_at,
+                   (
+                     select count(*) from orders o
+                     where o.position_id=p.position_id
+                       and o.side='SELL'
+                       and o.status in ('NEW','SENT','PARTIAL_FILLED')
+                   ) as pending_sell_cnt
+            from positions p
+            where p.status in ('OPEN','PARTIAL_EXIT')
+            order by p.opened_at asc, p.position_id asc
+            limit ?
+            """,
+            (int(limit),),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
     def get_pending_exit_orders(self, limit: int = 100) -> list[dict[str, Any]]:
         cur = self.conn.cursor()
         cur.execute(

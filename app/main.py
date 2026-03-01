@@ -596,6 +596,123 @@ def sync_pending_exits(db: DB, limit: int = 100) -> int:
     return changed
 
 
+def trigger_time_exit_orders(db: DB, max_hold_min: int = 15, limit: int = 100) -> int:
+    """시간 기반 청산 트리거: 오래된 OPEN/PARTIAL_EXIT 포지션에 SELL 주문 생성."""
+    broker = _build_broker()
+    now = datetime.now()
+    created = 0
+
+    for p in db.get_positions_for_exit_scan(limit=limit):
+        if int(p.get("pending_sell_cnt") or 0) > 0:
+            continue
+
+        opened_at = _parse_sqlite_ts(p.get("opened_at"))
+        if opened_at is None:
+            continue
+        hold_min = (now - opened_at).total_seconds() / 60.0
+        if hold_min < float(max_hold_min):
+            continue
+
+        total_qty = float(p.get("qty") or 0.0)
+        exited_qty = float(p.get("exited_qty") or 0.0)
+        remain_qty = max(0.0, total_qty - exited_qty)
+        if remain_qty <= 0:
+            continue
+
+        position_id = int(p["position_id"])
+        signal_id = int(p.get("signal_id") or 0)
+        ticker = str(p["ticker"])
+
+        send = broker.send_order(
+            OrderRequest(
+                signal_id=signal_id,
+                ticker=ticker,
+                side="SELL",
+                qty=remain_qty,
+                expected_price=83600.0,
+            )
+        )
+
+        db.begin()
+        try:
+            order_id = db.insert_order(
+                position_id=position_id,
+                signal_id=signal_id,
+                ticker=ticker,
+                side="SELL",
+                qty=remain_qty,
+                order_type="MARKET",
+                status="SENT",
+                price=None,
+                autocommit=False,
+            )
+
+            if send.status in {"SENT", "NEW", "PARTIAL_FILLED"}:
+                db.update_order_status(order_id=order_id, status=send.status, broker_order_id=send.broker_order_id, autocommit=False)
+                db.commit()
+                log_and_notify(
+                    f"EXIT_ORDER_SENT:{ticker} (position_id={position_id}, order_id={order_id}, reason=TIME_EXIT, hold_min={hold_min:.1f})"
+                )
+                _sync_exit_order_once(
+                    db,
+                    broker,
+                    position_id=position_id,
+                    signal_id=signal_id,
+                    order_id=order_id,
+                    ticker=ticker,
+                    order_qty=remain_qty,
+                    broker_order_id=send.broker_order_id,
+                )
+                created += 1
+                continue
+
+            if send.status == "FILLED":
+                db.update_order_filled(
+                    order_id=order_id,
+                    price=float(send.avg_price or 0.0),
+                    filled_qty=float(send.filled_qty or remain_qty),
+                    broker_order_id=send.broker_order_id,
+                    autocommit=False,
+                )
+                db.set_position_closed(
+                    position_id=position_id,
+                    reason_code="TIME_EXIT",
+                    exited_qty=total_qty,
+                    autocommit=False,
+                )
+                db.insert_position_event(
+                    position_id=position_id,
+                    event_type="FULL_EXIT",
+                    action="EXECUTED",
+                    reason_code="TIME_EXIT",
+                    detail_json=json.dumps({"signal_id": signal_id, "order_id": order_id, "filled_qty": send.filled_qty, "avg_price": send.avg_price}),
+                    idempotency_key=f"time-exit:{position_id}:{order_id}",
+                    autocommit=False,
+                )
+                db.commit()
+                log_and_notify(f"POSITION_CLOSED:{position_id} reason=TIME_EXIT")
+                created += 1
+                continue
+
+            db.update_order_status(order_id=order_id, status=send.status, broker_order_id=send.broker_order_id, autocommit=False)
+            db.insert_position_event(
+                position_id=position_id,
+                event_type="BLOCK",
+                action="BLOCKED",
+                reason_code=send.reason_code or "EXIT_ORDER_REJECTED",
+                detail_json=json.dumps({"signal_id": signal_id, "order_id": order_id}),
+                idempotency_key=f"exit-block:{position_id}:{order_id}",
+                autocommit=False,
+            )
+            db.commit()
+            created += 1
+        except Exception:
+            db.rollback()
+            raise
+
+    return created
+
+
 def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> ExecStatus:
     """Tx #2 + Tx #3: risk gate, order/position lifecycle, and close simulation.
 
@@ -767,6 +884,7 @@ def run_happy_path_demo() -> None:
     with DB("stock_trader.db") as db:
         db.init()
         sync_pending_entries(db)
+        trigger_time_exit_orders(db, max_hold_min=15)
         sync_pending_exits(db)
         bundle = ingest_and_create_signal(db)
         if not bundle:

@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from app.main import ingest_and_create_signal, execute_signal, sync_pending_entries, sync_pending_exits
+from app.main import ingest_and_create_signal, execute_signal, sync_pending_entries, sync_pending_exits, trigger_time_exit_orders
 from app.storage.db import DB, IllegalTransitionError
 from app.risk.engine import kill_switch
 from app.execution.broker_base import OrderResult
@@ -360,6 +360,30 @@ class TestMainFlow(unittest.TestCase):
         row2 = cur.fetchone()
         self.assertEqual(row2[0], "CLOSED")
         self.assertAlmostEqual(float(row2[1]), 1.0)
+
+    def test_trigger_time_exit_orders_creates_sell(self) -> None:
+        self.db.begin()
+        pos_id = self.db.create_position("005930", 1, 1.0, autocommit=False)
+        self.db.set_position_open(pos_id, avg_entry_price=83500.0, opened_value=83500.0, autocommit=False)
+        # 오래된 포지션으로 만들어 트리거 대상화
+        self.db.conn.execute("update positions set opened_at = datetime('now','-60 minutes') where position_id=?", (pos_id,))
+        self.db.commit()
+
+        with patch(
+            "app.main.PaperBroker.send_order",
+            return_value=OrderResult(status="SENT", filled_qty=0, avg_price=0.0, broker_order_id="SX-1"),
+        ), patch(
+            "app.main.PaperBroker.inquire_order",
+            return_value=OrderResult(status="PARTIAL_FILLED", filled_qty=0.5, avg_price=83600.0, broker_order_id="SX-1"),
+        ):
+            created = trigger_time_exit_orders(self.db, max_hold_min=15)
+        self.assertGreaterEqual(created, 1)
+
+        cur = self.db.conn.cursor()
+        cur.execute("select count(*) from orders where side='SELL'")
+        self.assertEqual(cur.fetchone()[0], 1)
+        cur.execute("select status from positions where position_id=?", (pos_id,))
+        self.assertEqual(cur.fetchone()[0], "PARTIAL_EXIT")
 
 
 if __name__ == "__main__":
