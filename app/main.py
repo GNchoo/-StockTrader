@@ -596,6 +596,142 @@ def sync_pending_exits(db: DB, limit: int = 100) -> int:
     return changed
 
 
+def trigger_trailing_stop_orders(
+    db: DB,
+    current_prices: dict[str, float] | None = None,
+    *,
+    trailing_arm_pct: float = 0.005,
+    trailing_gap_pct: float = 0.003,
+    limit: int = 100,
+) -> int:
+    """트레일링 스탑 기반 청산 트리거.
+
+    - high_watermark 갱신
+    - arm 조건(진입가 대비 수익률) 만족 후
+    - 고점 대비 하락폭(trailing_gap_pct) 발생 시 SELL 주문 생성
+    """
+    if not current_prices:
+        return 0
+
+    broker = _build_broker()
+    created = 0
+
+    for p in db.get_positions_for_exit_scan(limit=limit):
+        if int(p.get("pending_sell_cnt") or 0) > 0:
+            continue
+
+        ticker = str(p["ticker"])
+        cur_price = float(current_prices.get(ticker) or 0.0)
+        if cur_price <= 0:
+            continue
+
+        position_id = int(p["position_id"])
+        signal_id = int(p.get("signal_id") or 0)
+        total_qty = float(p.get("qty") or 0.0)
+        exited_qty = float(p.get("exited_qty") or 0.0)
+        remain_qty = max(0.0, total_qty - exited_qty)
+        if remain_qty <= 0:
+            continue
+
+        entry = float(p.get("avg_entry_price") or 0.0)
+        if entry <= 0:
+            continue
+
+        db.update_position_high_watermark(position_id, cur_price)
+        high = float((db.conn.execute("select high_watermark from positions where position_id=?", (position_id,)).fetchone() or [cur_price])[0] or cur_price)
+
+        pnl_from_entry = (cur_price - entry) / max(entry, 1e-9)
+        dd_from_high = (high - cur_price) / max(high, 1e-9)
+
+        if pnl_from_entry < trailing_arm_pct:
+            continue
+        if dd_from_high < trailing_gap_pct:
+            continue
+
+        send = broker.send_order(
+            OrderRequest(
+                signal_id=signal_id,
+                ticker=ticker,
+                side="SELL",
+                qty=remain_qty,
+                expected_price=cur_price,
+            )
+        )
+
+        db.begin()
+        try:
+            order_id = db.insert_order(
+                position_id=position_id,
+                signal_id=signal_id,
+                ticker=ticker,
+                side="SELL",
+                qty=remain_qty,
+                order_type="MARKET",
+                status="SENT",
+                price=None,
+                autocommit=False,
+            )
+
+            if send.status in {"SENT", "NEW", "PARTIAL_FILLED"}:
+                db.update_order_status(order_id=order_id, status=send.status, broker_order_id=send.broker_order_id, autocommit=False)
+                db.commit()
+                log_and_notify(
+                    f"EXIT_ORDER_SENT:{ticker} (position_id={position_id}, order_id={order_id}, reason=TRAILING_STOP, dd={dd_from_high:.4f})"
+                )
+                _sync_exit_order_once(
+                    db,
+                    broker,
+                    position_id=position_id,
+                    signal_id=signal_id,
+                    order_id=order_id,
+                    ticker=ticker,
+                    order_qty=remain_qty,
+                    broker_order_id=send.broker_order_id,
+                )
+                created += 1
+                continue
+
+            if send.status == "FILLED":
+                db.update_order_filled(
+                    order_id=order_id,
+                    price=float(send.avg_price or cur_price),
+                    filled_qty=float(send.filled_qty or remain_qty),
+                    broker_order_id=send.broker_order_id,
+                    autocommit=False,
+                )
+                db.set_position_closed(position_id=position_id, reason_code="TRAILING_STOP", exited_qty=total_qty, autocommit=False)
+                db.insert_position_event(
+                    position_id=position_id,
+                    event_type="FULL_EXIT",
+                    action="EXECUTED",
+                    reason_code="TRAILING_STOP",
+                    detail_json=json.dumps({"signal_id": signal_id, "order_id": order_id, "filled_qty": send.filled_qty, "avg_price": send.avg_price}),
+                    idempotency_key=f"trail-exit:{position_id}:{order_id}",
+                    autocommit=False,
+                )
+                db.commit()
+                created += 1
+                continue
+
+            db.update_order_status(order_id=order_id, status=send.status, broker_order_id=send.broker_order_id, autocommit=False)
+            db.insert_position_event(
+                position_id=position_id,
+                event_type="BLOCK",
+                action="BLOCKED",
+                reason_code=send.reason_code or "EXIT_ORDER_REJECTED",
+                detail_json=json.dumps({"signal_id": signal_id, "order_id": order_id}),
+                idempotency_key=f"trail-block:{position_id}:{order_id}",
+                autocommit=False,
+            )
+            db.commit()
+            created += 1
+        except Exception:
+            db.rollback()
+            raise
+
+    return created
+
+
 def trigger_time_exit_orders(db: DB, max_hold_min: int = 15, limit: int = 100) -> int:
     """시간 기반 청산 트리거: 오래된 OPEN/PARTIAL_EXIT 포지션에 SELL 주문 생성."""
     broker = _build_broker()
@@ -883,8 +1019,15 @@ def execute_signal(db: DB, signal_id: int, ticker: str, qty: float = 1.0) -> Exe
 def run_happy_path_demo() -> None:
     with DB("stock_trader.db") as db:
         db.init()
+        pol = db.get_exit_policy()
         sync_pending_entries(db)
-        trigger_time_exit_orders(db, max_hold_min=15)
+        trigger_trailing_stop_orders(
+            db,
+            current_prices={},  # TODO: 실시간 시세 연동 후 주입
+            trailing_arm_pct=float(pol.get("trailing_arm_pct", 0.005)),
+            trailing_gap_pct=float(pol.get("trailing_gap_pct", 0.003)),
+        )
+        trigger_time_exit_orders(db, max_hold_min=int(pol.get("time_exit_min", 15)))
         sync_pending_exits(db)
         bundle = ingest_and_create_signal(db)
         if not bundle:

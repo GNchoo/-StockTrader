@@ -4,7 +4,14 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from app.main import ingest_and_create_signal, execute_signal, sync_pending_entries, sync_pending_exits, trigger_time_exit_orders
+from app.main import (
+    ingest_and_create_signal,
+    execute_signal,
+    sync_pending_entries,
+    sync_pending_exits,
+    trigger_time_exit_orders,
+    trigger_trailing_stop_orders,
+)
 from app.storage.db import DB, IllegalTransitionError
 from app.risk.engine import kill_switch
 from app.execution.broker_base import OrderResult
@@ -377,6 +384,35 @@ class TestMainFlow(unittest.TestCase):
             return_value=OrderResult(status="PARTIAL_FILLED", filled_qty=0.5, avg_price=83600.0, broker_order_id="SX-1"),
         ):
             created = trigger_time_exit_orders(self.db, max_hold_min=15)
+        self.assertGreaterEqual(created, 1)
+
+        cur = self.db.conn.cursor()
+        cur.execute("select count(*) from orders where side='SELL'")
+        self.assertEqual(cur.fetchone()[0], 1)
+        cur.execute("select status from positions where position_id=?", (pos_id,))
+        self.assertEqual(cur.fetchone()[0], "PARTIAL_EXIT")
+
+    def test_trigger_trailing_stop_orders_creates_sell(self) -> None:
+        self.db.begin()
+        pos_id = self.db.create_position("005930", 1, 1.0, autocommit=False)
+        self.db.set_position_open(pos_id, avg_entry_price=100.0, opened_value=100.0, autocommit=False)
+        # 고점 형성
+        self.db.update_position_high_watermark(pos_id, 110.0, autocommit=False)
+        self.db.commit()
+
+        with patch(
+            "app.main.PaperBroker.send_order",
+            return_value=OrderResult(status="SENT", filled_qty=0, avg_price=0.0, broker_order_id="TR-1"),
+        ), patch(
+            "app.main.PaperBroker.inquire_order",
+            return_value=OrderResult(status="PARTIAL_FILLED", filled_qty=0.5, avg_price=106.0, broker_order_id="TR-1"),
+        ):
+            created = trigger_trailing_stop_orders(
+                self.db,
+                current_prices={"005930": 106.0},
+                trailing_arm_pct=0.05,
+                trailing_gap_pct=0.03,
+            )
         self.assertGreaterEqual(created, 1)
 
         cur = self.db.conn.cursor()

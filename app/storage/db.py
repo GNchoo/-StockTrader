@@ -98,6 +98,7 @@ class DB:
               exited_qty real not null default 0,
               avg_entry_price real,
               opened_value real,
+              high_watermark real,
               leverage real not null default 1.0,
               opened_at text default current_timestamp,
               closed_at text,
@@ -181,6 +182,12 @@ class DB:
             values('retry_policy', '{"max_attempts_per_signal":2,"min_retry_interval_sec":30}', 'global', 0, null, 'v1.2.3 base')
             """
         )
+        cur.execute(
+            """
+            insert or ignore into parameter_registry(name, value_json, scope, tune_required, target_phase, rationale)
+            values('exit_policy', '{"time_exit_min":15,"trailing_arm_pct":0.005,"trailing_gap_pct":0.003}', 'global', 0, null, 'v1.2.3 base')
+            """
+        )
 
         # lightweight migration for old local sqlite files
         try:
@@ -193,6 +200,8 @@ class DB:
             pcols = [r[1] for r in self.conn.execute("pragma table_info(positions)").fetchall()]
             if "exited_qty" not in pcols:
                 self.conn.execute("alter table positions add column exited_qty real not null default 0")
+            if "high_watermark" not in pcols:
+                self.conn.execute("alter table positions add column high_watermark real")
         except Exception:
             pass
 
@@ -250,6 +259,26 @@ class DB:
         return {
             "max_attempts_per_signal": max(1, max_attempts),
             "min_retry_interval_sec": max(1, min_retry_sec),
+        }
+
+    def get_exit_policy(self) -> dict[str, float]:
+        raw = self.get_parameter("exit_policy") or {}
+        try:
+            time_exit_min = float(raw.get("time_exit_min", 15) or 15)
+        except Exception:
+            time_exit_min = 15.0
+        try:
+            trailing_arm_pct = float(raw.get("trailing_arm_pct", 0.005) or 0.005)
+        except Exception:
+            trailing_arm_pct = 0.005
+        try:
+            trailing_gap_pct = float(raw.get("trailing_gap_pct", 0.003) or 0.003)
+        except Exception:
+            trailing_gap_pct = 0.003
+        return {
+            "time_exit_min": max(1.0, time_exit_min),
+            "trailing_arm_pct": max(0.0, trailing_arm_pct),
+            "trailing_gap_pct": max(0.0, trailing_gap_pct),
         }
 
     def insert_news_if_new(self, item: dict[str, Any], autocommit: bool = True) -> int | None:
@@ -343,10 +372,10 @@ class DB:
         cur.execute(
             """
             update positions
-            set status='OPEN', avg_entry_price=?, opened_value=?
+            set status='OPEN', avg_entry_price=?, opened_value=?, high_watermark=coalesce(high_watermark, ?)
             where position_id=? and status='PENDING_ENTRY'
             """,
-            (avg_entry_price, opened_value, position_id),
+            (avg_entry_price, opened_value, avg_entry_price, position_id),
         )
         if cur.rowcount == 0:
             raise IllegalTransitionError(f"Invalid transition to OPEN for position_id={position_id}")
@@ -365,6 +394,23 @@ class DB:
         )
         if cur.rowcount == 0:
             raise IllegalTransitionError(f"Invalid transition to PARTIAL_EXIT for position_id={position_id}")
+        if autocommit:
+            self.conn.commit()
+
+    def update_position_high_watermark(self, position_id: int, price: float, autocommit: bool = True) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            update positions
+            set high_watermark=case
+                when high_watermark is null then ?
+                when ? > high_watermark then ?
+                else high_watermark
+            end
+            where position_id=? and status in ('OPEN','PARTIAL_EXIT')
+            """,
+            (price, price, price, position_id),
+        )
         if autocommit:
             self.conn.commit()
 
@@ -532,7 +578,7 @@ class DB:
         cur = self.conn.cursor()
         cur.execute(
             """
-            select p.position_id, p.signal_id, p.ticker, p.qty, p.exited_qty, p.status, p.opened_at,
+            select p.position_id, p.signal_id, p.ticker, p.qty, p.exited_qty, p.status, p.opened_at, p.avg_entry_price, p.high_watermark,
                    (
                      select count(*) from orders o
                      where o.position_id=p.position_id
