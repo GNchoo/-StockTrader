@@ -66,6 +66,8 @@ cd stock_trader
 
 ## 다음 작업(P1)
 - PostgreSQL 실제 연동으로 전환
+- repository 분리(`NewsRepo`, `OrderRepo`, `PositionRepo`)
+
+## 완료된 항목
 - scorer 가중치 `parameter_registry` 연동
 - 상태 전이 가드 강화(IllegalTransitionError)
-- repository 분리(`NewsRepo`, `OrderRepo`, `PositionRepo`)
