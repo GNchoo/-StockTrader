@@ -34,6 +34,7 @@ PYTHONPATH=. python3 -m app.main
 
 환경 변수는 `.env`(또는 로컬 전용 `.env.local`)에 설정하세요.
 - Broker 선택: `BROKER=paper|kis` (기본: `paper`)
+- News 소스: `NEWS_MODE=sample|rss`, `NEWS_RSS_URL=<rss-url>`
 - Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 - KIS(한국투자증권): `KIS_APP_KEY`, `KIS_APP_SECRET`, `KIS_ACCOUNT_NO`, `KIS_PRODUCT_CODE`, `KIS_MODE`
 - `.env`/`.env.local`은 커밋되지 않고, `.env.example`만 커밋됩니다.
