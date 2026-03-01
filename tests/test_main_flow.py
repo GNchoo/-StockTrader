@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.main import ingest_and_create_signal, execute_signal, sync_pending_entries
-from app.storage.db import DB
+from app.storage.db import DB, IllegalTransitionError
 from app.risk.engine import kill_switch
 from app.execution.broker_base import OrderResult
 
@@ -141,6 +141,52 @@ class TestMainFlow(unittest.TestCase):
         self.assertEqual(cur.fetchone()[0], "OPEN")
         cur.execute("select status from orders where side='BUY' order by id desc limit 1")
         self.assertEqual(cur.fetchone()[0], "FILLED")
+
+    def test_sync_pending_entries_rejected_cancels_position(self) -> None:
+        bundle = ingest_and_create_signal(self.db)
+        self.assertIsNotNone(bundle)
+
+        with patch(
+            "app.main.PaperBroker.send_order",
+            return_value=OrderResult(status="SENT", filled_qty=0, avg_price=0, broker_order_id="ABC"),
+        ):
+            status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
+        self.assertEqual(status, "PENDING")
+
+        with patch(
+            "app.main.PaperBroker.inquire_order",
+            return_value=OrderResult(status="REJECTED", filled_qty=0, avg_price=0.0, reason_code="BROKER_REJECT", broker_order_id="ABC"),
+        ):
+            changed = sync_pending_entries(self.db)
+        self.assertGreaterEqual(changed, 1)
+
+        cur = self.db.conn.cursor()
+        cur.execute("select status, exit_reason_code from positions order by position_id desc limit 1")
+        row = cur.fetchone()
+        self.assertEqual(row[0], "CANCELLED")
+        self.assertEqual(row[1], "BROKER_REJECT")
+        cur.execute("select status from orders where side='BUY' order by id desc limit 1")
+        self.assertEqual(cur.fetchone()[0], "REJECTED")
+
+    def test_order_terminal_transition_guard(self) -> None:
+        bundle = ingest_and_create_signal(self.db)
+        self.assertIsNotNone(bundle)
+
+        with patch(
+            "app.main.PaperBroker.send_order",
+            return_value=OrderResult(status="SENT", filled_qty=0, avg_price=0, broker_order_id="ABC"),
+        ):
+            status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
+        self.assertEqual(status, "PENDING")
+
+        # 강제로 FILLED 처리 후 역전이 시도
+        cur = self.db.conn.cursor()
+        cur.execute("select id from orders where side='BUY' order by id desc limit 1")
+        order_id = int(cur.fetchone()[0])
+        self.db.update_order_filled(order_id=order_id, price=83500.0, broker_order_id="ABC")
+
+        with self.assertRaises(IllegalTransitionError):
+            self.db.update_order_status(order_id=order_id, status="SENT", broker_order_id="ABC")
 
 
 if __name__ == "__main__":
