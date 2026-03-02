@@ -8,6 +8,7 @@ from app.signal.integrity import EventTicker, validate_signal_binding
 from app.execution.broker_base import OrderRequest
 from app.execution.paper_broker import PaperBroker  # backward-compatible test patch target
 from app.execution.runtime import build_broker, resolve_expected_price, collect_current_prices
+from app.execution.exit_policy import should_exit_on_opposite_signal, should_exit_on_time
 from app.risk.engine import can_trade
 from app.storage.db import DB
 from app.signal.scorer import ScoreInput, compute_scores
@@ -783,11 +784,13 @@ def trigger_opposite_signal_exit_orders(
         position_id = int(p["position_id"])
         signal_id = int(p.get("signal_id") or 0)
         latest_signal_id = int(sig.get("id") or 0)
-        if latest_signal_id == signal_id and decision == "BUY":
-            # 자기 자신의 매수 진입 신호로 즉시 청산되는 경로 방지
-            continue
-
-        should_exit = decision in {"IGNORE", "BLOCK"} or score < float(exit_score_threshold)
+        should_exit = should_exit_on_opposite_signal(
+            latest_signal_id=latest_signal_id,
+            entry_signal_id=signal_id,
+            decision=decision,
+            score=score,
+            threshold=exit_score_threshold,
+        )
         if not should_exit:
             continue
         total_qty = float(p.get("qty") or 0.0)
@@ -901,7 +904,7 @@ def trigger_time_exit_orders(db: DB, max_hold_min: int = 15, limit: int = 100, b
         if opened_at is None:
             continue
         hold_min = (now - opened_at).total_seconds() / 60.0
-        if hold_min < float(max_hold_min):
+        if not should_exit_on_time(hold_minutes=hold_min, max_hold_min=max_hold_min):
             continue
 
         total_qty = float(p.get("qty") or 0.0)
