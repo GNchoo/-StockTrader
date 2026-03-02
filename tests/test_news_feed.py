@@ -28,12 +28,13 @@ class TestNewsFeed(unittest.TestCase):
         self.assertEqual(item.source, "rss")
         self.assertEqual(item.title, "삼성전자 호재 뉴스")
         self.assertEqual(item.url, "https://example.com/a")
+        self.assertEqual(item.tier, 3)
 
     def test_fetch_rss_news_items_multiple(self):
         xml = """
         <rss><channel>
           <item><title>A</title><link>https://example.com/a</link><description>a</description></item>
-          <item><title>B</title><link>https://example.com/b</link><description>b</description></item>
+          <item><title>B</title><link>https://finance.naver.com/item/main.naver?code=005930</link><description>b</description></item>
         </channel></rss>
         """
 
@@ -48,6 +49,8 @@ class TestNewsFeed(unittest.TestCase):
         self.assertEqual(len(items), 2)
         self.assertEqual(items[0].title, "A")
         self.assertEqual(items[1].title, "B")
+        self.assertEqual(items[0].tier, 3)
+        self.assertEqual(items[1].tier, 1)
 
     def test_fetch_rss_news_raises_on_missing_item(self):
         class R:
