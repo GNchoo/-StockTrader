@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TypedDict, Literal
 
 from app.ingestion.news_feed import sample_news, build_hash, fetch_rss_news_items, NewsFetchError
@@ -54,6 +54,63 @@ def _load_news_item():
             log_and_notify(f"NEWS_FETCH_FALLBACK_SAMPLE:{e}")
             return sample_news()
     return sample_news()
+
+
+def _bounded(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
+    return max(lo, min(hi, float(v)))
+
+
+def _derive_signal_fields(news) -> tuple[dict[str, float], str, str]:
+    text = f"{news.title} {news.body}".lower()
+
+    positive_terms = ["투자", "수주", "실적", "호재", "상승", "증가", "확대", "승인"]
+    negative_terms = ["적자", "하락", "감소", "리콜", "규제", "소송", "중단", "악재", "파업"]
+
+    pos_hits = sum(1 for t in positive_terms if t in text)
+    neg_hits = sum(1 for t in negative_terms if t in text)
+
+    impact = _bounded(45 + 12 * pos_hits - 10 * neg_hits)
+    source_reliability = _bounded(85 - (int(getattr(news, "tier", 2)) - 1) * 15)
+
+    age_hours = max(0.0, (datetime.now(timezone.utc) - news.published_at.astimezone(timezone.utc)).total_seconds() / 3600.0)
+    freshness = _bounded(100 - age_hours * 4)
+    novelty = _bounded(35 + freshness * 0.65)
+
+    market_reaction = _bounded(50 + 10 * pos_hits - 12 * neg_hits)
+    liquidity = 55.0
+
+    risk_penalty = _bounded(8 + 8 * neg_hits + max(0.0, age_hours - 12) * 0.5, 0.0, 60.0)
+
+    components = {
+        "impact": round(impact, 2),
+        "source_reliability": round(source_reliability, 2),
+        "novelty": round(novelty, 2),
+        "market_reaction": round(market_reaction, 2),
+        "liquidity": round(liquidity, 2),
+        "risk_penalty": round(risk_penalty, 2),
+        "freshness_weight": round(freshness / 100.0, 3),
+        "positive_hits": float(pos_hits),
+        "negative_hits": float(neg_hits),
+    }
+
+    if freshness >= 75:
+        priced_in_flag = "LOW"
+    elif freshness >= 40:
+        priced_in_flag = "MEDIUM"
+    else:
+        priced_in_flag = "HIGH"
+
+    # schema 제약(decision in BUY/HOLD/IGNORE/BLOCK)에 맞춰 사용
+    if neg_hits >= 2:
+        decision = "BLOCK"
+    elif neg_hits > pos_hits:
+        decision = "IGNORE"
+    elif pos_hits == 0:
+        decision = "HOLD"
+    else:
+        decision = "BUY"
+
+    return components, priced_in_flag, decision
 
 
 def ingest_and_create_signal(db: DB) -> SignalBundle | None:
@@ -114,15 +171,7 @@ def ingest_and_create_signal(db: DB) -> SignalBundle | None:
         )
         validate_signal_binding(input_news_id=news_id, event_ticker=event_ticker)
 
-        components = {
-            "impact": 75,
-            "source_reliability": 70,
-            "novelty": 90,
-            "market_reaction": 50,
-            "liquidity": 50,
-            "risk_penalty": 10,
-            "freshness_weight": 1.0,
-        }
+        components, priced_in_flag, decision = _derive_signal_fields(news)
         weights = db.get_score_weights()
         raw_score, total_score = compute_scores(
             ScoreInput(
@@ -136,6 +185,12 @@ def ingest_and_create_signal(db: DB) -> SignalBundle | None:
             weights=weights,
         )
 
+        # 점수 기반 최종 의사결정 보정
+        if total_score < 40:
+            decision = "BLOCK"
+        elif total_score < 55 and decision == "BUY":
+            decision = "HOLD"
+
         signal_id = db.insert_signal(
             {
                 "news_id": news_id,
@@ -144,12 +199,15 @@ def ingest_and_create_signal(db: DB) -> SignalBundle | None:
                 "raw_score": raw_score,
                 "total_score": total_score,
                 "components": json.dumps(components, ensure_ascii=False),
-                "priced_in_flag": "LOW",
-                "decision": "BUY",
+                "priced_in_flag": priced_in_flag,
+                "decision": decision,
             },
             autocommit=False,
         )
         db.commit()
+        if decision != "BUY":
+            log_and_notify(f"SIGNAL_SKIPPED:{mapping.ticker} decision={decision} score={total_score:.1f}")
+            return None
         return {"signal_id": signal_id, "ticker": mapping.ticker}
     except Exception:
         db.rollback()
