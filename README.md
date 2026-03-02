@@ -6,12 +6,27 @@
 - v1.2.3 통합 DDL: `sql/schema_v1_2_3.sql`
 - SQLite 기반 로컬 E2E 어댑터 (`app/storage/db.py`)
 - 트랜잭션 분리 메인 플로우
-  - Tx#1: 뉴스 수집/매핑/신호 저장
-  - Tx#2: 리스크 게이트/주문/포지션 OPEN
+  - Tx#1: 뉴스 수집/매핑/신호 저장 (`app/signal/ingest.py`)
+  - Tx#2: 리스크 게이트/주문/포지션 OPEN (`app/execution/entry.py`)
   - Tx#3: (옵션) 데모 샘플 청산(OPEN -> CLOSED)
+- 동기화/청산 로직 분리
+  - 주문 동기화: `app/execution/sync.py`
+  - 청산 트리거: `app/execution/triggers.py`
+  - 청산 정책: `app/execution/exit_policy.py`
+- 공통 유틸
+  - 시그널 의사결정: `app/signal/decision.py`
+  - 브로커 런타임: `app/execution/runtime.py`
+  - UTC 시간 파싱: `app/common/timeutil.py`
 - Exit 스케줄 사이클 분리: `app/scheduler/exit_runner.py`
 - 텔레그램 로그 알림 (`app/monitor/telegram_logger.py`)
-- 테스트 11종+ (lifecycle/risk/main flow/signal derivation)
+- 테스트 48종 (unittest discover 기준)
+
+## 실행 흐름(텍스트 다이어그램)
+1) `app.main.run_happy_path_demo()`
+2) `run_exit_cycle()`로 기존 포지션 sync/exit 처리
+3) `ingest_and_create_signal()` (signal/ingest)
+4) BUY 신호면 `execute_signal()` (execution/entry)
+5) 주기적으로 `sync_pending_entries/exits` + `trigger_*_exit_orders` (execution/sync, execution/triggers)
 
 ## 실행
 ```bash
