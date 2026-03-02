@@ -387,13 +387,13 @@ def _parse_sqlite_ts(ts: str | None) -> datetime | None:
         return None
 
 
-def sync_pending_entries(db: DB, limit: int = 100) -> int:
+def sync_pending_entries(db: DB, limit: int = 100, broker=None) -> int:
     """재시작/주기 동기화: PENDING_ENTRY 주문의 체결 상태를 동기화.
 
     retry_policy(max_attempts_per_signal/min_retry_interval_sec)를 적용해
     장시간 미체결 주문을 재시도 또는 종료한다.
     """
-    broker = _build_broker()
+    broker = broker or _build_broker()
     rows = db.get_pending_entry_orders(limit=limit)
     retry_policy = db.get_retry_policy()
     max_attempts = int(retry_policy.get("max_attempts_per_signal", 2) or 2)
@@ -667,8 +667,8 @@ def _sync_exit_order_once(
         raise
 
 
-def sync_pending_exits(db: DB, limit: int = 100) -> int:
-    broker = _build_broker()
+def sync_pending_exits(db: DB, limit: int = 100, broker=None) -> int:
+    broker = broker or _build_broker()
     rows = db.get_pending_exit_orders(limit=limit)
     changed = 0
     for row in rows:
@@ -694,6 +694,7 @@ def trigger_trailing_stop_orders(
     trailing_arm_pct: float = 0.005,
     trailing_gap_pct: float = 0.003,
     limit: int = 100,
+    broker=None,
 ) -> int:
     """트레일링 스탑 기반 청산 트리거.
 
@@ -704,7 +705,7 @@ def trigger_trailing_stop_orders(
     if not current_prices:
         return 0
 
-    broker = _build_broker()
+    broker = broker or _build_broker()
     created = 0
 
     for p in db.get_positions_for_exit_scan(limit=limit):
@@ -828,13 +829,14 @@ def trigger_opposite_signal_exit_orders(
     *,
     exit_score_threshold: float = 70.0,
     limit: int = 100,
+    broker=None,
 ) -> int:
     """반대 뉴스/약화 신호 기반 청산 트리거.
 
     최신 신호가 IGNORE/BLOCK 또는 점수 저하(total_score < threshold)면
     보유 포지션에 SELL 주문을 생성한다.
     """
-    broker = _build_broker()
+    broker = broker or _build_broker()
     created = 0
 
     for p in db.get_positions_for_exit_scan(limit=limit):
@@ -848,12 +850,17 @@ def trigger_opposite_signal_exit_orders(
 
         decision = str(sig.get("decision") or "").upper()
         score = float(sig.get("total_score") or 0.0)
-        should_exit = decision in {"IGNORE", "BLOCK"} or score < float(exit_score_threshold)
-        if not should_exit:
-            continue
 
         position_id = int(p["position_id"])
         signal_id = int(p.get("signal_id") or 0)
+        latest_signal_id = int(sig.get("id") or 0)
+        if latest_signal_id == signal_id:
+            # 자기 자신의 진입 신호로 즉시 청산되는 경로 방지
+            continue
+
+        should_exit = decision in {"IGNORE", "BLOCK"} or score < float(exit_score_threshold)
+        if not should_exit:
+            continue
         total_qty = float(p.get("qty") or 0.0)
         exited_qty = float(p.get("exited_qty") or 0.0)
         remain_qty = max(0.0, total_qty - exited_qty)
@@ -951,9 +958,9 @@ def trigger_opposite_signal_exit_orders(
     return created
 
 
-def trigger_time_exit_orders(db: DB, max_hold_min: int = 15, limit: int = 100) -> int:
+def trigger_time_exit_orders(db: DB, max_hold_min: int = 15, limit: int = 100, broker=None) -> int:
     """시간 기반 청산 트리거: 오래된 OPEN/PARTIAL_EXIT 포지션에 SELL 주문 생성."""
-    broker = _build_broker()
+    broker = broker or _build_broker()
     now = datetime.now()
     created = 0
 
