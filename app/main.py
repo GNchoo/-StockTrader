@@ -14,6 +14,7 @@ from app.signal.scorer import ScoreInput, compute_scores
 from app.signal.decision import derive_signal_fields
 from app.monitor.telegram_logger import log_and_notify
 from app.config import settings
+from app.common.timeutil import parse_utc_ts
 
 
 class SignalBundle(TypedDict):
@@ -312,31 +313,7 @@ def _sync_entry_order_once(
 
 
 def _parse_sqlite_ts(ts: str | None) -> datetime | None:
-    if not ts:
-        return None
-    s = str(ts).strip()
-    if not s:
-        return None
-    try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except Exception:
-        dt = None
-
-    if dt is None:
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
-            try:
-                dt = datetime.strptime(s, fmt)
-                break
-            except Exception:
-                continue
-
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
-    return dt
+    return parse_utc_ts(ts)
 
 
 def sync_pending_entries(db: DB, limit: int = 100, broker=None) -> int:

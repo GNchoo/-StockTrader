@@ -1,7 +1,8 @@
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.config import settings
+from app.common.timeutil import parse_utc_ts
 
 
 @dataclass
@@ -48,19 +49,7 @@ def _default_params() -> RiskParams:
 
 
 def _parse_ts(v: str | None) -> datetime | None:
-    if not v:
-        return None
-    s = str(v).strip().replace("Z", "")
-    try:
-        return datetime.fromisoformat(s)
-    except Exception:
-        pass
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
-        try:
-            return datetime.strptime(s, fmt)
-        except Exception:
-            continue
-    return None
+    return parse_utc_ts(v)
 
 
 def can_trade(
@@ -91,7 +80,11 @@ def can_trade(
 
         consecutive_losses = int(account_state.get("consecutive_losses", 0) or 0)
         if consecutive_losses >= p.loss_streak_cooldown:
-            base_now = now or datetime.now()
+            base_now = now or datetime.now(timezone.utc)
+            if base_now.tzinfo is None:
+                base_now = base_now.replace(tzinfo=timezone.utc)
+            else:
+                base_now = base_now.astimezone(timezone.utc)
             cooldown_until = _parse_ts(account_state.get("cooldown_until"))
             if cooldown_until is None:
                 cooldown_until = base_now + timedelta(minutes=p.cooldown_minutes)
