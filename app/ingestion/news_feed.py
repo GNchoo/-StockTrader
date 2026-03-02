@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import email.utils
 import xml.etree.ElementTree as ET
+from urllib.parse import urlparse
 
 import requests
 
@@ -38,6 +39,18 @@ def _parse_pub_date(value: str | None) -> datetime:
         return datetime.now(timezone.utc)
 
 
+def _infer_tier(source: str, link: str) -> int:
+    host = (urlparse(link).netloc or "").lower()
+    src = (source or "").lower()
+    text = f"{host} {src}"
+
+    if any(k in text for k in ["finance.naver.com", "kind.krx.co.kr", "dart.fss.or.kr", "reuters", "bloomberg"]):
+        return 1
+    if any(k in text for k in ["mk.co.kr", "hankyung.com", "yna.co.kr", "newsis.com"]):
+        return 2
+    return 3
+
+
 def fetch_rss_news_items(rss_url: str, limit: int = 10, timeout: float = 5.0) -> list[NewsItem]:
     try:
         r = requests.get(rss_url, timeout=timeout)
@@ -64,7 +77,7 @@ def fetch_rss_news_items(rss_url: str, limit: int = 10, timeout: float = 5.0) ->
             out.append(
                 NewsItem(
                     source="rss",
-                    tier=2,
+                    tier=_infer_tier("rss", link),
                     title=title,
                     body=desc,
                     url=link,

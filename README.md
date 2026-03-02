@@ -11,7 +11,7 @@
   - Tx#3: (옵션) 데모 샘플 청산(OPEN -> CLOSED)
 - Exit 스케줄 사이클 분리: `app/scheduler/exit_runner.py`
 - 텔레그램 로그 알림 (`app/monitor/telegram_logger.py`)
-- 테스트 10종 (lifecycle/risk/main flow)
+- 테스트 11종+ (lifecycle/risk/main flow/signal derivation)
 
 ## 실행
 ```bash
@@ -61,8 +61,9 @@ PYTHONPATH=. python3 -m app.main
   - OAuth 토큰 발급
   - 현금주문 API 호출(매수/매도)
   - 주문 접수(ACK) 상태 반환 (`SENT`)
+  - 체결조회(inquire_order) 및 현재가(get_last_price)
   - 헬스체크(OK/WARN/CRITICAL)
-- 체결조회/정정/취소/정산 반영은 다음 단계에서 확장 예정입니다.
+- 정정/취소/정산 반영은 다음 단계에서 확장 예정입니다.
 
 예상 출력(예시):
 ```text

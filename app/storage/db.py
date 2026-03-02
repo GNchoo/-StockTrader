@@ -419,6 +419,15 @@ class DB:
         if autocommit:
             self.conn.commit()
 
+    def get_position_high_watermark(self, position_id: int) -> float | None:
+        cur = self.conn.cursor()
+        cur.execute("select high_watermark from positions where position_id=?", (position_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        v = row[0]
+        return float(v) if v is not None else None
+
     def set_position_closed(self, position_id: int, reason_code: str, exited_qty: float | None = None, autocommit: bool = True) -> None:
         cur = self.conn.cursor()
         cur.execute(

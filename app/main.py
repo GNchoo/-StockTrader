@@ -5,9 +5,9 @@ from typing import TypedDict, Literal
 from app.ingestion.news_feed import sample_news, build_hash, fetch_rss_news_items, NewsFetchError
 from app.nlp.ticker_mapper import map_ticker, MappingResult
 from app.signal.integrity import EventTicker, validate_signal_binding
-from app.execution.paper_broker import PaperBroker
-from app.execution.kis_broker import KISBroker
 from app.execution.broker_base import OrderRequest
+from app.execution.paper_broker import PaperBroker  # backward-compatible test patch target
+from app.execution.runtime import build_broker, resolve_expected_price, collect_current_prices
 from app.risk.engine import can_trade
 from app.storage.db import DB
 from app.signal.scorer import ScoreInput, compute_scores
@@ -24,20 +24,11 @@ ExecStatus = Literal["FILLED", "PENDING", "BLOCKED"]
 
 
 def _build_broker():
-    broker_name = (settings.broker or "paper").lower()
-    if broker_name == "kis":
-        return KISBroker()
-    return PaperBroker()
+    return build_broker()
 
 
 def _resolve_expected_price(broker, ticker: str) -> float | None:
-    px = broker.get_last_price(ticker)
-    if px is None:
-        return None
-    px = float(px)
-    if px <= 0:
-        return None
-    return px
+    return resolve_expected_price(broker, ticker)
 
 
 def _load_news_item():
@@ -382,9 +373,25 @@ def _parse_sqlite_ts(ts: str | None) -> datetime | None:
     if not s:
         return None
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     except Exception:
+        dt = None
+
+    if dt is None:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                dt = datetime.strptime(s, fmt)
+                break
+            except Exception:
+                continue
+
+    if dt is None:
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt
 
 
 def sync_pending_entries(db: DB, limit: int = 100, broker=None) -> int:
@@ -400,7 +407,7 @@ def sync_pending_entries(db: DB, limit: int = 100, broker=None) -> int:
     min_retry_sec = int(retry_policy.get("min_retry_interval_sec", 30) or 30)
 
     changed = 0
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
 
     for row in rows:
         position_id = int(row["position_id"])
@@ -730,7 +737,7 @@ def trigger_trailing_stop_orders(
             continue
 
         db.update_position_high_watermark(position_id, cur_price)
-        high = float((db.conn.execute("select high_watermark from positions where position_id=?", (position_id,)).fetchone() or [cur_price])[0] or cur_price)
+        high = float(db.get_position_high_watermark(position_id) or cur_price)
 
         pnl_from_entry = (cur_price - entry) / max(entry, 1e-9)
         dd_from_high = (high - cur_price) / max(high, 1e-9)
@@ -854,8 +861,8 @@ def trigger_opposite_signal_exit_orders(
         position_id = int(p["position_id"])
         signal_id = int(p.get("signal_id") or 0)
         latest_signal_id = int(sig.get("id") or 0)
-        if latest_signal_id == signal_id:
-            # 자기 자신의 진입 신호로 즉시 청산되는 경로 방지
+        if latest_signal_id == signal_id and decision == "BUY":
+            # 자기 자신의 매수 진입 신호로 즉시 청산되는 경로 방지
             continue
 
         should_exit = decision in {"IGNORE", "BLOCK"} or score < float(exit_score_threshold)
@@ -961,7 +968,7 @@ def trigger_opposite_signal_exit_orders(
 def trigger_time_exit_orders(db: DB, max_hold_min: int = 15, limit: int = 100, broker=None) -> int:
     """시간 기반 청산 트리거: 오래된 OPEN/PARTIAL_EXIT 포지션에 SELL 주문 생성."""
     broker = broker or _build_broker()
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     created = 0
 
     for p in db.get_positions_for_exit_scan(limit=limit):
@@ -1272,19 +1279,7 @@ def execute_signal(
 
 
 def _collect_current_prices(db: DB, broker, limit: int = 100) -> dict[str, float]:
-    prices: dict[str, float] = {}
-    for p in db.get_positions_for_exit_scan(limit=limit):
-        ticker = str(p["ticker"])
-        if ticker in prices:
-            continue
-        px = broker.get_last_price(ticker)
-        if px and px > 0:
-            prices[ticker] = float(px)
-            continue
-        fallback = float(p.get("avg_entry_price") or 0.0)
-        if fallback > 0:
-            prices[ticker] = fallback
-    return prices
+    return collect_current_prices(db, broker, limit=limit)
 
 
 def run_happy_path_demo() -> None:

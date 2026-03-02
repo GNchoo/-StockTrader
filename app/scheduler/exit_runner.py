@@ -1,6 +1,9 @@
+from app.execution.runtime import build_broker, collect_current_prices
+
+# backward-compatible test patch targets
+_build_broker = build_broker
+_collect_current_prices = collect_current_prices
 from app.main import (
-    _build_broker,
-    _collect_current_prices,
     sync_pending_entries,
     trigger_opposite_signal_exit_orders,
     trigger_trailing_stop_orders,
