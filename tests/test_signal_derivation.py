@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from app.ingestion.news_feed import NewsItem
-from app.main import _derive_signal_fields
+from app.signal.decision import derive_signal_fields
 
 
 class TestSignalDerivation(unittest.TestCase):
@@ -15,7 +15,7 @@ class TestSignalDerivation(unittest.TestCase):
             url="https://example.com/positive",
             published_at=datetime.now(timezone.utc) - timedelta(hours=1),
         )
-        components, priced_in, decision = _derive_signal_fields(news)
+        components, priced_in, decision = derive_signal_fields(news)
         self.assertEqual(decision, "BUY")
         self.assertEqual(priced_in, "LOW")
         self.assertGreater(components["impact"], 50)
@@ -29,7 +29,7 @@ class TestSignalDerivation(unittest.TestCase):
             url="https://example.com/negative",
             published_at=datetime.now(timezone.utc) - timedelta(hours=2),
         )
-        _, _, decision = _derive_signal_fields(news)
+        _, _, decision = derive_signal_fields(news)
         self.assertEqual(decision, "BLOCK")
 
 
