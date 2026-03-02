@@ -108,6 +108,8 @@ def trigger_trailing_stop_orders_impl(
                     broker_order_id=send.broker_order_id,
                     autocommit=False,
                 )
+                pnl_delta = (float(send.avg_price or cur_price) - entry) * float(send.filled_qty or remain_qty)
+                db.apply_realized_pnl(datetime.now().date().isoformat(), pnl_delta, autocommit=False)
                 db.set_position_closed(position_id=position_id, reason_code="TRAILING_STOP", exited_qty=total_qty, autocommit=False)
                 db.insert_position_event(
                     position_id=position_id,
@@ -185,7 +187,8 @@ def trigger_opposite_signal_exit_orders_impl(
         if remain_qty <= 0:
             continue
 
-        expected_price = float(p.get("avg_entry_price") or 0.0)
+        avg_entry = float(p.get("avg_entry_price") or 0.0)
+        expected_price = avg_entry
         if expected_price <= 0:
             expected_price = _resolve_expected_price(broker, ticker) or 0.0
         if expected_price <= 0:
@@ -243,6 +246,8 @@ def trigger_opposite_signal_exit_orders_impl(
                     broker_order_id=send.broker_order_id,
                     autocommit=False,
                 )
+                pnl_delta = (float(send.avg_price or 0.0) - avg_entry) * float(send.filled_qty or remain_qty)
+                db.apply_realized_pnl(datetime.now().date().isoformat(), pnl_delta, autocommit=False)
                 db.set_position_closed(position_id=position_id, reason_code="OPPOSITE_SIGNAL", exited_qty=total_qty, autocommit=False)
                 db.insert_position_event(
                     position_id=position_id,
@@ -312,11 +317,10 @@ def trigger_time_exit_orders_impl(
         position_id = int(p["position_id"])
         signal_id = int(p.get("signal_id") or 0)
         ticker = str(p["ticker"])
+        avg_entry = float(p.get("avg_entry_price") or 0.0)
 
         expected_price = _resolve_expected_price(broker, ticker)
-        if expected_price is None:
-            expected_price = float(p.get("avg_entry_price") or 0.0)
-        if expected_price <= 0:
+        if expected_price is None or expected_price <= 0:
             log_and_notify(f"EXIT_SKIPPED:NO_PRICE ticker={ticker} position_id={position_id} reason=TIME_EXIT")
             continue
 
@@ -371,6 +375,8 @@ def trigger_time_exit_orders_impl(
                     broker_order_id=send.broker_order_id,
                     autocommit=False,
                 )
+                pnl_delta = (float(send.avg_price or 0.0) - avg_entry) * float(send.filled_qty or remain_qty)
+                db.apply_realized_pnl(datetime.now().date().isoformat(), pnl_delta, autocommit=False)
                 db.set_position_closed(
                     position_id=position_id,
                     reason_code="TIME_EXIT",

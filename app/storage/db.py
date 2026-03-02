@@ -225,6 +225,25 @@ class DB:
         row = cur.fetchone()
         return dict(row) if row else None
 
+    def apply_realized_pnl(self, trade_date: str, pnl_delta: float, autocommit: bool = True) -> None:
+        self.ensure_risk_state_today(trade_date, autocommit=False)
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            update risk_state
+            set daily_realized_pnl = daily_realized_pnl + ?,
+                consecutive_losses = case
+                    when ? < 0 then consecutive_losses + 1
+                    else 0
+                end,
+                updated_at = current_timestamp
+            where trade_date=?
+            """,
+            (float(pnl_delta or 0.0), float(pnl_delta or 0.0), trade_date),
+        )
+        if autocommit:
+            self.conn.commit()
+
     def get_parameter(self, name: str) -> dict[str, Any] | None:
         cur = self.conn.cursor()
         cur.execute("select value_json from parameter_registry where name=?", (name,))

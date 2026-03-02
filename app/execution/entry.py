@@ -47,9 +47,18 @@ def execute_signal_impl(
             log_and_notify(f"BLOCKED:NO_PRICE ticker={ticker} signal_id={signal_id}")
             return "BLOCKED"
 
+        effective_qty = float(qty or 0.0)
+        if effective_qty <= 0:
+            target_value = max(0.0, float(getattr(settings, "risk_target_position_value", 0.0) or 0.0))
+            if target_value <= 0:
+                db.rollback()
+                log_and_notify(f"BLOCKED:INVALID_QTY ticker={ticker} signal_id={signal_id}")
+                return "BLOCKED"
+            effective_qty = max(1.0, float(int(target_value / expected_price)))
+
         risk = can_trade(
             account_state=rs,
-            proposed_notional=qty * expected_price,
+            proposed_notional=effective_qty * expected_price,
             current_open_positions=db.count_open_positions(),
             current_symbol_exposure=db.get_open_exposure_for_ticker(ticker),
         )
@@ -58,13 +67,13 @@ def execute_signal_impl(
             log_and_notify(f"BLOCKED:{risk.reason_code}")
             return "BLOCKED"
 
-        position_id = db.create_position(ticker, signal_id, qty, autocommit=False)
+        position_id = db.create_position(ticker, signal_id, effective_qty, autocommit=False)
         order_id = db.insert_order(
             position_id=position_id,
             signal_id=signal_id,
             ticker=ticker,
             side="BUY",
-            qty=qty,
+            qty=effective_qty,
             order_type="MARKET",
             status="SENT",
             price=None,
@@ -76,7 +85,7 @@ def execute_signal_impl(
                 signal_id=signal_id,
                 ticker=ticker,
                 side="BUY",
-                qty=qty,
+                qty=effective_qty,
                 expected_price=expected_price,
             )
         )
@@ -101,7 +110,7 @@ def execute_signal_impl(
                 signal_id=signal_id,
                 order_id=order_id,
                 ticker=ticker,
-                qty=qty,
+                qty=effective_qty,
                 broker_order_id=result.broker_order_id,
             )
             if sync_result == "FILLED":
@@ -131,7 +140,7 @@ def execute_signal_impl(
         db.set_position_open(
             position_id=position_id,
             avg_entry_price=result.avg_price,
-            opened_value=result.avg_price * qty,
+            opened_value=result.avg_price * effective_qty,
             autocommit=False,
         )
         entry_key = f"entry:{position_id}:{order_id}"
@@ -172,7 +181,7 @@ def execute_signal_impl(
             signal_id=signal_id,
             ticker=ticker,
             side="SELL",
-            qty=qty,
+            qty=effective_qty,
             order_type="MARKET",
             status="SENT",
             price=None,
@@ -180,6 +189,7 @@ def execute_signal_impl(
         )
         exit_price = float(result.avg_price or 0.0)
         db.update_order_filled(order_id=exit_order_id, price=exit_price, autocommit=False)
+        db.apply_realized_pnl(trade_date, (exit_price - float(result.avg_price or 0.0)) * effective_qty, autocommit=False)
         db.set_position_closed(position_id=position_id, reason_code="TIME_EXIT", autocommit=False)
         db.insert_position_event(
             position_id=position_id,

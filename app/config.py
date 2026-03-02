@@ -63,6 +63,7 @@ class Settings:
     risk_loss_streak_cooldown: int = int(os.getenv("RISK_LOSS_STREAK_COOLDOWN", "3"))
     risk_cooldown_minutes: int = int(os.getenv("RISK_COOLDOWN_MINUTES", "60"))
     risk_assumed_stop_loss_pct: float = float(os.getenv("RISK_ASSUMED_STOP_LOSS_PCT", "0.015"))
+    risk_target_position_value: float = float(os.getenv("RISK_TARGET_POSITION_VALUE", "100000"))
 
     # News ingestion
     news_mode: str = os.getenv("NEWS_MODE", "sample").lower()  # sample | rss

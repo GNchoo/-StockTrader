@@ -14,6 +14,18 @@ def derive_signal_fields(news) -> tuple[dict[str, float], str, str]:
     pos_hits = sum(1 for t in positive_terms if t in text)
     neg_hits = sum(1 for t in negative_terms if t in text)
 
+    # 문맥 보정: 긍정 키워드 + 부정 방향어가 함께 있으면 부정 가중
+    negative_context_patterns = [
+        ("투자", "감소"),
+        ("실적", "하락"),
+        ("증가", "둔화"),
+        ("확대", "중단"),
+        ("승인", "취소"),
+    ]
+    for a, b in negative_context_patterns:
+        if a in text and b in text:
+            neg_hits += 1
+
     impact = bounded(45 + 12 * pos_hits - 10 * neg_hits)
     source_reliability = bounded(85 - (int(getattr(news, "tier", 2)) - 1) * 15)
 

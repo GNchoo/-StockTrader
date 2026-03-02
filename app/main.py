@@ -231,12 +231,13 @@ def _sync_exit_order_once(
 
     db.begin()
     try:
-        pos = db.conn.execute("select qty, exited_qty from positions where position_id=?", (position_id,)).fetchone()
+        pos = db.conn.execute("select qty, exited_qty, avg_entry_price from positions where position_id=?", (position_id,)).fetchone()
         if not pos:
             db.rollback()
             return "BLOCKED"
         total_qty = float(pos[0] or 0.0)
         prev_exited = float(pos[1] or 0.0)
+        avg_entry_price = float(pos[2] or 0.0)
 
         if status.status in {"PARTIAL_FILLED", "FILLED"}:
             filled_qty = float(status.filled_qty or 0.0)
@@ -258,6 +259,10 @@ def _sync_exit_order_once(
                 )
 
             cum_exit = prev_exited + min(filled_qty, order_qty)
+            exit_px = float(status.avg_price or 0.0)
+            pnl_delta = (exit_px - avg_entry_price) * min(filled_qty, order_qty)
+            db.apply_realized_pnl(datetime.now().date().isoformat(), pnl_delta, autocommit=False)
+
             if cum_exit >= total_qty - 1e-9:
                 db.set_position_closed(position_id=position_id, reason_code="FULL_EXIT_FILLED", exited_qty=total_qty, autocommit=False)
                 db.insert_position_event(
@@ -265,7 +270,7 @@ def _sync_exit_order_once(
                     event_type="FULL_EXIT",
                     action="EXECUTED",
                     reason_code="FULL_EXIT_FILLED",
-                    detail_json=json.dumps({"signal_id": signal_id, "order_id": order_id, "filled_qty": filled_qty, "avg_price": status.avg_price}),
+                    detail_json=json.dumps({"signal_id": signal_id, "order_id": order_id, "filled_qty": filled_qty, "avg_price": status.avg_price, "pnl_delta": pnl_delta}),
                     idempotency_key=f"exit-fill:{position_id}:{order_id}",
                     autocommit=False,
                 )
@@ -278,7 +283,7 @@ def _sync_exit_order_once(
                 event_type="PARTIAL_EXIT",
                 action="EXECUTED",
                 reason_code="PARTIAL_EXIT_FILLED",
-                detail_json=json.dumps({"signal_id": signal_id, "order_id": order_id, "filled_qty": filled_qty, "avg_price": status.avg_price}),
+                detail_json=json.dumps({"signal_id": signal_id, "order_id": order_id, "filled_qty": filled_qty, "avg_price": status.avg_price, "pnl_delta": pnl_delta}),
                 idempotency_key=f"partial-exit:{position_id}:{order_id}:{int(filled_qty*10000)}",
                 autocommit=False,
             )
