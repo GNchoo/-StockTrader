@@ -1042,7 +1042,19 @@ def execute_signal(
             log_and_notify("BLOCKED:RISK_STATE_MISSING")
             return "BLOCKED"
 
-        risk = can_trade(account_state=rs)
+        broker = _build_broker()
+        expected_price = _resolve_expected_price(broker, ticker)
+        if expected_price is None:
+            db.rollback()
+            log_and_notify(f"BLOCKED:NO_PRICE ticker={ticker} signal_id={signal_id}")
+            return "BLOCKED"
+
+        risk = can_trade(
+            account_state=rs,
+            proposed_notional=qty * expected_price,
+            current_open_positions=db.count_open_positions(),
+            current_symbol_exposure=db.get_open_exposure_for_ticker(ticker),
+        )
         if not risk.allowed:
             db.rollback()
             log_and_notify(f"BLOCKED:{risk.reason_code}")
@@ -1060,13 +1072,6 @@ def execute_signal(
             price=None,
             autocommit=False,
         )
-
-        broker = _build_broker()
-        expected_price = _resolve_expected_price(broker, ticker)
-        if expected_price is None:
-            db.rollback()
-            log_and_notify(f"BLOCKED:NO_PRICE ticker={ticker} signal_id={signal_id}")
-            return "BLOCKED"
 
         result = broker.send_order(
             OrderRequest(

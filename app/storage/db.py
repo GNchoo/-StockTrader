@@ -594,6 +594,25 @@ class DB:
         row = cur.fetchone()
         return dict(row) if row else None
 
+    def count_open_positions(self) -> int:
+        cur = self.conn.cursor()
+        cur.execute("select count(*) from positions where status in ('OPEN','PARTIAL_EXIT')")
+        row = cur.fetchone()
+        return int(row[0] or 0) if row else 0
+
+    def get_open_exposure_for_ticker(self, ticker: str) -> float:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            select coalesce(sum(coalesce(opened_value, 0)), 0)
+            from positions
+            where ticker=? and status in ('OPEN','PARTIAL_EXIT')
+            """,
+            (ticker,),
+        )
+        row = cur.fetchone()
+        return float(row[0] or 0.0) if row else 0.0
+
     def get_positions_for_exit_scan(self, limit: int = 100) -> list[dict[str, Any]]:
         cur = self.conn.cursor()
         cur.execute(

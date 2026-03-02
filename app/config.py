@@ -55,6 +55,15 @@ class Settings:
     # Scheduler
     exit_cycle_interval_sec: int = int(os.getenv("EXIT_CYCLE_INTERVAL_SEC", "60"))
 
+    # Risk limits
+    risk_max_loss_per_trade: float = float(os.getenv("RISK_MAX_LOSS_PER_TRADE", "30000"))
+    risk_daily_loss_limit: float = float(os.getenv("RISK_DAILY_LOSS_LIMIT", "100000"))
+    risk_max_exposure_per_symbol: float = float(os.getenv("RISK_MAX_EXPOSURE_PER_SYMBOL", "300000"))
+    risk_max_concurrent_positions: int = int(os.getenv("RISK_MAX_CONCURRENT_POSITIONS", "3"))
+    risk_loss_streak_cooldown: int = int(os.getenv("RISK_LOSS_STREAK_COOLDOWN", "3"))
+    risk_cooldown_minutes: int = int(os.getenv("RISK_COOLDOWN_MINUTES", "60"))
+    risk_assumed_stop_loss_pct: float = float(os.getenv("RISK_ASSUMED_STOP_LOSS_PCT", "0.015"))
+
     # News ingestion
     news_mode: str = os.getenv("NEWS_MODE", "sample").lower()  # sample | rss
     news_rss_url: str = os.getenv("NEWS_RSS_URL", "https://www.mk.co.kr/rss/30000001/")
