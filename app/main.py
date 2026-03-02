@@ -30,6 +30,16 @@ def _build_broker():
     return PaperBroker()
 
 
+def _resolve_expected_price(broker, ticker: str) -> float | None:
+    px = broker.get_last_price(ticker)
+    if px is None:
+        return None
+    px = float(px)
+    if px <= 0:
+        return None
+    return px
+
+
 def _load_news_item():
     mode = (settings.news_mode or "sample").lower()
     if mode == "rss":
@@ -389,13 +399,20 @@ def sync_pending_entries(db: DB, limit: int = 100) -> int:
                         raise
                 else:
                     # 기존 주문을 만료 처리하고 새 시도로 재주문
+                    expected_price = _resolve_expected_price(broker, ticker)
+                    if expected_price is None:
+                        log_and_notify(
+                            f"RETRY_SKIPPED:NO_PRICE ticker={ticker} signal_id={signal_id} order_id={order_id}"
+                        )
+                        continue
+
                     new_result = broker.send_order(
                         OrderRequest(
                             signal_id=signal_id,
                             ticker=ticker,
                             side="BUY",
                             qty=qty,
-                            expected_price=83500.0,
+                            expected_price=expected_price,
                         )
                     )
                     db.begin()
@@ -785,13 +802,20 @@ def trigger_opposite_signal_exit_orders(
         if remain_qty <= 0:
             continue
 
+        expected_price = float(p.get("avg_entry_price") or 0.0)
+        if expected_price <= 0:
+            expected_price = _resolve_expected_price(broker, ticker) or 0.0
+        if expected_price <= 0:
+            log_and_notify(f"EXIT_SKIPPED:NO_PRICE ticker={ticker} position_id={position_id} reason=OPPOSITE_SIGNAL")
+            continue
+
         send = broker.send_order(
             OrderRequest(
                 signal_id=signal_id,
                 ticker=ticker,
                 side="SELL",
                 qty=remain_qty,
-                expected_price=float(p.get("avg_entry_price") or 0.0) or 83600.0,
+                expected_price=expected_price,
             )
         )
 
@@ -896,13 +920,20 @@ def trigger_time_exit_orders(db: DB, max_hold_min: int = 15, limit: int = 100) -
         signal_id = int(p.get("signal_id") or 0)
         ticker = str(p["ticker"])
 
+        expected_price = _resolve_expected_price(broker, ticker)
+        if expected_price is None:
+            expected_price = float(p.get("avg_entry_price") or 0.0)
+        if expected_price <= 0:
+            log_and_notify(f"EXIT_SKIPPED:NO_PRICE ticker={ticker} position_id={position_id} reason=TIME_EXIT")
+            continue
+
         send = broker.send_order(
             OrderRequest(
                 signal_id=signal_id,
                 ticker=ticker,
                 side="SELL",
                 qty=remain_qty,
-                expected_price=83600.0,
+                expected_price=expected_price,
             )
         )
 
@@ -1031,13 +1062,19 @@ def execute_signal(
         )
 
         broker = _build_broker()
+        expected_price = _resolve_expected_price(broker, ticker)
+        if expected_price is None:
+            db.rollback()
+            log_and_notify(f"BLOCKED:NO_PRICE ticker={ticker} signal_id={signal_id}")
+            return "BLOCKED"
+
         result = broker.send_order(
             OrderRequest(
                 signal_id=signal_id,
                 ticker=ticker,
                 side="BUY",
                 qty=qty,
-                expected_price=83500.0,
+                expected_price=expected_price,
             )
         )
 
@@ -1138,7 +1175,8 @@ def execute_signal(
             price=None,
             autocommit=False,
         )
-        db.update_order_filled(order_id=exit_order_id, price=83600.0, autocommit=False)
+        exit_price = float(result.avg_price or 0.0)
+        db.update_order_filled(order_id=exit_order_id, price=exit_price, autocommit=False)
         db.set_position_closed(position_id=position_id, reason_code="TIME_EXIT", autocommit=False)
         db.insert_position_event(
             position_id=position_id,
@@ -1149,7 +1187,7 @@ def execute_signal(
                 {
                     "signal_id": signal_id,
                     "exit_order_id": exit_order_id,
-                    "exit_price": 83600.0,
+                    "exit_price": exit_price,
                 }
             ),
             idempotency_key=f"exit:{position_id}:{exit_order_id}",
