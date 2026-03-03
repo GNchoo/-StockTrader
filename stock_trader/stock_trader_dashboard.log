@@ -1,0 +1,14 @@
+nohup: ignoring input
+Traceback (most recent call last):
+  File "/home/fallman/projects/StockTrader/stock_trader/app/dashboard.py", line 202, in <module>
+    run_server(8081)
+  File "/home/fallman/projects/StockTrader/stock_trader/app/dashboard.py", line 192, in run_server
+    server = HTTPServer(('0.0.0.0', port), DashboardHandler)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/socketserver.py", line 457, in __init__
+    self.server_bind()
+  File "/usr/lib/python3.12/http/server.py", line 136, in server_bind
+    socketserver.TCPServer.server_bind(self)
+  File "/usr/lib/python3.12/socketserver.py", line 473, in server_bind
+    self.socket.bind(self.server_address)
+OSError: [Errno 98] Address already in use

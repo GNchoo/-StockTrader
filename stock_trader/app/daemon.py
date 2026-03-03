@@ -17,7 +17,10 @@ from app.execution.triggers import (
 from app.common.timeutil import parse_utc_ts
 
 
-# --- 의존성 어댑터 (app.main의 private 함수 대신 직접 정의) ---
+from app.execution.sync_logic import sync_entry_order_once, sync_exit_order_once
+
+
+# --- 의존성 어댑터 (shared sync_logic 사용) ---
 def _build_broker():
     return build_broker()
 
@@ -27,17 +30,15 @@ def _resolve_expected_price(broker, ticker: str):
 
 
 def _sync_entry_order_once(db, broker, *, position_id, signal_id, order_id, ticker, qty, broker_order_id):
-    """매수 주문 체결 동기화 — app.main._sync_entry_order_once와 동일 로직"""
-    from app.main import _sync_entry_order_once as _impl
-    return _impl(db, broker, position_id=position_id, signal_id=signal_id,
-                 order_id=order_id, ticker=ticker, qty=qty, broker_order_id=broker_order_id)
+    return sync_entry_order_once(db, broker, position_id=position_id, signal_id=signal_id,
+                                order_id=order_id, ticker=ticker, qty=qty, 
+                                broker_order_id=broker_order_id, log_and_notify=log_and_notify)
 
 
 def _sync_exit_order_once(db, broker, *, position_id, signal_id, order_id, ticker, order_qty, broker_order_id):
-    """매도 주문 체결 동기화 — app.main._sync_exit_order_once와 동일 로직"""
-    from app.main import _sync_exit_order_once as _impl
-    return _impl(db, broker, position_id=position_id, signal_id=signal_id,
-                 order_id=order_id, ticker=ticker, order_qty=order_qty, broker_order_id=broker_order_id)
+    return sync_exit_order_once(db, broker, position_id=position_id, signal_id=signal_id,
+                               order_id=order_id, ticker=ticker, order_qty=order_qty,
+                               broker_order_id=broker_order_id, log_and_notify=log_and_notify)
 
 
 def daemon_loop():

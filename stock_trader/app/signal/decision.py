@@ -149,20 +149,14 @@ def derive_signal_fields(news, tech_score: float = 0.0, tech_rec: str = "NEUTRAL
     # Decision: 의사결정 (종합 점수 기반)
     if combined_neg_score >= 4.0 or tech_rec == "SELL":
         decision = "BLOCK"
-    elif combined_neg_score > combined_pos_score:
-        decision = "IGNORE"
-    elif context_neg_boost > 0 and combined_pos_score <= combined_neg_score:
-        decision = "IGNORE"
-    elif combined_pos_score == 0:
-        decision = "IGNORE" if combined_neg_score > 0 else "HOLD"
     elif combined_pos_score >= 3.0 and combined_neg_score <= 1.0:
         if tech_rec == "BUY":  # 뉴스 + 차트 모두 좋으면 매수
             decision = "BUY"
         else:  # 뉴스는 좋지만 차트가 뒷받침하지 않으면 보류
             decision = "HOLD"
-    elif combined_pos_score >= 1.5:
-        decision = "HOLD"  # 약한 긍정 신호
+    elif combined_pos_score >= 1.5 and combined_pos_score > combined_neg_score:
+        decision = "HOLD"  # 약한 매수 신호이거나 차트가 뒷받침되지 않음
     else:
-        decision = "IGNORE"
+        decision = "IGNORE"  # 부정이 강하거나 긍정이 너무 약함 (0 포함)
     
     return components, priced_in_flag, decision
