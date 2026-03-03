@@ -5,12 +5,14 @@ def bounded(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
     return max(lo, min(hi, float(v)))
 
 
-def derive_signal_fields(news) -> tuple[dict[str, float], str, str]:
+def derive_signal_fields(news, tech_score: float = 0.0, tech_rec: str = "NEUTRAL") -> tuple[dict[str, float], str, str]:
     """
     뉴스 데이터에서 신호 필드를 추출합니다.
     
     Args:
         news: 뉴스 객체 (title, body, published_at, tier, source 속성 필요)
+        tech_score: 기술적 차트 기반 점수 (-100 ~ 100)
+        tech_rec: 기술적 차트 추천 ("BUY", "SELL", "NEUTRAL")
         
     Returns:
         tuple: (components_dict, priced_in_flag, decision)
@@ -112,6 +114,15 @@ def derive_signal_fields(news) -> tuple[dict[str, float], str, str]:
     # Risk penalty: 위험 패널티
     risk_penalty = bounded(10 + 5 * final_neg_score + max(0.0, age_hours - 6) * 0.8, 0.0, 50.0)
     
+    # 기술적 점수 결합 (기술적 점수가 양수면 매수 강도 강화, 음수면 억제)
+    combined_pos_score = final_pos_score
+    combined_neg_score = final_neg_score
+    
+    if tech_score > 0:
+        combined_pos_score += (tech_score / 100.0) * 1.5 # 최대 1.5점 가산
+    elif tech_score < 0:
+        combined_neg_score += (abs(tech_score) / 100.0) * 2.0 # 차트가 나쁘면 더 엄격하게 (최대 2.0 차감 효과)
+    
     components = {
         "impact": round(impact, 2),
         "source_reliability": round(source_reliability, 2),
@@ -122,6 +133,7 @@ def derive_signal_fields(news) -> tuple[dict[str, float], str, str]:
         "freshness": round(freshness, 2),
         "positive_score": round(final_pos_score, 2),
         "negative_score": round(final_neg_score, 2),
+        "tech_score": round(tech_score, 1),
         "context_adjustment": round(context_adjustment, 2),
         "age_hours": round(age_hours, 2),
     }
@@ -134,19 +146,21 @@ def derive_signal_fields(news) -> tuple[dict[str, float], str, str]:
     else:
         priced_in_flag = "HIGH"
     
-    # Decision: 의사결정
-    if final_neg_score >= 4.0:
+    # Decision: 의사결정 (종합 점수 기반)
+    if combined_neg_score >= 4.0 or tech_rec == "SELL":
         decision = "BLOCK"
-    elif final_neg_score > final_pos_score:
+    elif combined_neg_score > combined_pos_score:
         decision = "IGNORE"
-    elif context_neg_boost > 0 and final_pos_score <= final_neg_score:
-        # 부정 문맥이 감지되었고 긍정이 우세하지 않으면 IGNORE
+    elif context_neg_boost > 0 and combined_pos_score <= combined_neg_score:
         decision = "IGNORE"
-    elif final_pos_score == 0:
-        decision = "IGNORE" if final_neg_score > 0 else "HOLD"
-    elif final_pos_score >= 3.0 and final_neg_score <= 1.0:
-        decision = "BUY"
-    elif final_pos_score >= 1.5:
+    elif combined_pos_score == 0:
+        decision = "IGNORE" if combined_neg_score > 0 else "HOLD"
+    elif combined_pos_score >= 3.0 and combined_neg_score <= 1.0:
+        if tech_rec == "BUY": # 차트까지 좋으면 강력 매수
+            decision = "BUY"
+        else: # 차트는 그저 그렇지만 뉴스가 매우 좋음
+            decision = "BUY"
+    elif combined_pos_score >= 1.5:
         decision = "HOLD"  # 약한 긍정 신호
     else:
         decision = "IGNORE"

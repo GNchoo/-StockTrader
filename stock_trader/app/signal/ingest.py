@@ -7,6 +7,7 @@ from app.nlp.ticker_mapper import MappingResult, map_ticker
 from app.signal.decision import derive_signal_fields
 from app.signal.integrity import EventTicker, validate_signal_binding
 from app.signal.scorer import ScoreInput, compute_scores
+from app.signal.technical import compute_technical_score
 from app.storage.db import DB
 
 
@@ -95,7 +96,28 @@ def ingest_and_create_signal(db: DB, log_and_notify) -> SignalBundle | None:
         )
         validate_signal_binding(input_news_id=news_id, event_ticker=event_ticker)
 
-        components, priced_in_flag, decision = derive_signal_fields(news)
+        # 기술적 분석: 최신 가격 데이터 수집 로직
+        from app.execution.runtime import build_broker
+        broker = build_broker()
+        
+        closes = broker.get_recent_closes(mapping.ticker, count=30)
+        
+        tech_rec = "NEUTRAL"
+        tech_score_val = 0.0
+        tech_data = {}
+        if closes and len(closes) >= 25:
+            tech_data = compute_technical_score(closes)
+            tech_rec = tech_data.get("recommendation", "NEUTRAL")
+            tech_score_val = tech_data.get("score", 0.0)
+
+        components, priced_in_flag, decision = derive_signal_fields(
+            news, 
+            tech_score=tech_score_val, 
+            tech_rec=tech_rec
+        )
+        
+        if tech_data:
+            components["tech_analysis"] = tech_data
         weights = db.get_score_weights()
         raw_score, total_score = compute_scores(
             ScoreInput(

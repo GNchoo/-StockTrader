@@ -67,5 +67,16 @@ class PaperBroker(BrokerBase):
         volatility = random.uniform(0.95, 1.05)
         return float(base_price * volatility)
 
+    def get_recent_closes(self, ticker: str, count: int = 30) -> list[float] | None:
+        # 가상의 가격 배열 반환 (기술적 지표 테스트용)
+        base = self.get_last_price(ticker) or 10000.0
+        # 최근 상승 추세처럼 보이는 가상 데이터 생성
+        prices = []
+        for i in range(count):
+            # 오름차순으로 가격이 약간씩 오르는 형태 + 랜덤 노이즈
+            factor = 1.0 - ((count - i) * 0.005) + random.uniform(-0.02, 0.02)
+            prices.append(base * factor)
+        return prices
+
     def health_check(self) -> dict:
         return {"status": "OK", "latency_ms": self.base_latency_ms, "checks": {"broker": "paper"}}

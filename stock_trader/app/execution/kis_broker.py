@@ -252,6 +252,50 @@ class KISBroker(BrokerBase):
         except Exception:
             return None
 
+    def get_recent_closes(self, ticker: str, count: int = 30) -> list[float] | None:
+        """KIS API를 통해 과거 일봉 종가 배열을 반환 (오래된 순)."""
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-price"
+        headers = {
+            **self._auth_header(),
+            "appkey": settings.kis_app_key,
+            "appsecret": settings.kis_app_secret,
+            "tr_id": "FHKST01010400",  # 국내주식 기간별시세(일/주/월/년)
+            "custtype": "P",
+        }
+        today = datetime.now().strftime("%Y%m%d")
+        
+        # 참고: KIS API는 최신 데이터부터 내림차순으로 반환
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": str(ticker),
+            "FID_PERIOD_DIV_CODE": "D",
+            "FID_ORG_ADJ_PRC": "0" # 수정주가 반영 여부 (0:미반영, 1:반영) -> 분석에는 1이 좋으나, 기본값 유지
+        }
+        
+        try:
+            r = self.session.get(url, headers=headers, params=params, timeout=5)
+            if not r.ok:
+                return None
+            data = r.json() if r.text else {}
+            out = data.get("output", [])
+            if not out or not isinstance(out, list):
+                return None
+            
+            closes = []
+            for item in out[:count]:
+                price = self._to_float(item.get("stck_clpr"))
+                if price > 0:
+                    closes.append(price)
+            
+            if not closes:
+                return None
+                
+            # 가장 오래된 데이터가 배열 앞쪽에 오도독 역순 정렬
+            closes.reverse()
+            return closes
+        except Exception:
+            return None
+
     def health_check(self) -> dict:
         has_keys = bool(settings.kis_app_key and settings.kis_app_secret)
         has_account = bool(settings.kis_account_no)

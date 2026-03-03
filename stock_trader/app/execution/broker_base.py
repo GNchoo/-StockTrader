@@ -34,6 +34,10 @@ class BrokerBase(ABC):
         """현재가 조회 (미구현 브로커는 None 반환)."""
         return None
 
+    def get_recent_closes(self, ticker: str, count: int = 30) -> list[float] | None:
+        """최근 종가 목록 조회 (미구현 브로커는 None 반환)."""
+        return None
+
     @abstractmethod
     def health_check(self) -> dict:
         raise NotImplementedError
