@@ -59,24 +59,29 @@ def derive_signal_fields(news) -> tuple[dict[str, float], str, str]:
     }
     
     # 문맥 보정 적용
-    context_adjustment = 0
+    context_neg_boost = 0.0  # 부정 문맥 강화 (neg_score에 가산)
+    context_pos_reduction = 0.0  # 부정 문맥으로 인한 긍정 점수 차감
+    context_neg_reduction = 0.0  # 긍정 문맥으로 인한 부정 점수 차감
+    
     for positive_word, negative_words in context_patterns["negative_context"]:
         if positive_word in text:
             for negative_word in negative_words:
                 if negative_word in text:
-                    context_adjustment -= 1.5  # 부정적 문맥 강화
+                    context_neg_boost += 1.5  # 부정적 문맥 → neg_score 증가
+                    context_pos_reduction += 1.5  # 긍정 속 부정 → 긍정 점수 차감
                     break
     
     for negative_word, positive_words in context_patterns["positive_context"]:
         if negative_word in text:
             for positive_word in positive_words:
                 if positive_word in text:
-                    context_adjustment += 1.0  # 부정 완화
+                    context_neg_reduction += 1.0  # 부정 완화
                     break
     
     # 최종 점수 계산 (문맥 보정 적용)
-    final_pos_score = max(0, pos_score)
-    final_neg_score = max(0, neg_score + context_adjustment)
+    final_pos_score = max(0, pos_score - context_pos_reduction)
+    final_neg_score = max(0, neg_score + context_neg_boost - context_neg_reduction)
+    context_adjustment = -context_neg_boost - context_pos_reduction + context_neg_reduction
     
     # Impact: 긍정/부정 점수 차이에 기반
     impact_base = 50.0
@@ -134,8 +139,11 @@ def derive_signal_fields(news) -> tuple[dict[str, float], str, str]:
         decision = "BLOCK"
     elif final_neg_score > final_pos_score:
         decision = "IGNORE"
+    elif context_neg_boost > 0 and final_pos_score <= final_neg_score:
+        # 부정 문맥이 감지되었고 긍정이 우세하지 않으면 IGNORE
+        decision = "IGNORE"
     elif final_pos_score == 0:
-        decision = "HOLD"
+        decision = "IGNORE" if final_neg_score > 0 else "HOLD"
     elif final_pos_score >= 3.0 and final_neg_score <= 1.0:
         decision = "BUY"
     elif final_pos_score >= 1.5:

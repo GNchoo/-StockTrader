@@ -102,9 +102,9 @@ def fetch_rss_news(rss_url: str, timeout: float = 5.0) -> NewsItem:
 def sample_news() -> NewsItem:
     return NewsItem(
         source="sample",
-        tier=2,
-        title="삼성전자, 신규 반도체 투자 발표",
-        body="샘플 뉴스 본문",
+        tier=1,
+        title="삼성전자, 대규모 수주 확보 및 신규 투자 확대 발표",
+        body="삼성전자가 해외 대규모 수주를 확보하며 실적 호조가 기대된다. 회사 측은 신규 반도체 생산라인에 대한 투자를 확대하겠다고 밝혔다.",
         url="https://example.com/news/1",
         published_at=datetime.now(timezone.utc),
     )

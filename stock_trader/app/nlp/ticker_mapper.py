@@ -143,13 +143,17 @@ def map_ticker(text: str) -> MappingResult | None:
     """
     # 텍스트 정규화
     normalized_text = text.lower().replace(" ", "")
+    lower_text = text.lower()
     
     # 1. 정확한 매칭 시도 (긴 문자열 우선)
     exact_matches = []
     for alias, (ticker, name, confidence) in ALIASES.items():
         if ticker == "":  # 애매한 매핑 스킵
             continue
-        if alias.lower() in normalized_text:
+        # 원문(공백 포함)과 정규화(공백 제거) 모두 시도
+        alias_lower = alias.lower()
+        alias_normalized = alias_lower.replace(" ", "")
+        if alias_lower in lower_text or alias_normalized in normalized_text:
             exact_matches.append((len(alias), alias, ticker, name, confidence))
     
     if exact_matches:
@@ -157,13 +161,12 @@ def map_ticker(text: str) -> MappingResult | None:
         exact_matches.sort(reverse=True, key=lambda x: x[0])
         _, alias, ticker, name, confidence = exact_matches[0]
         
-        # 애매한 매핑과의 충돌 확인 (예: "삼성"과 "삼성전자"가 모두 매칭되는 경우)
-        ambiguous_conflicts = [
-            a for a in ["삼성", "현대", "LG", "SK"] 
-            if a in alias and a != alias
-        ]
+        # 애매한 매핑 차단: 매칭된 alias 자체가 짧은 애매한 키워드인 경우만 차단
+        # (예: "SK"가 매칭되면 차단, "SK하이닉스"가 매칭되면 통과)
+        ambiguous_short_forms = {"삼성", "현대", "LG", "SK"}
+        is_ambiguous = alias in ambiguous_short_forms
         
-        if not ambiguous_conflicts:
+        if not is_ambiguous:
             return MappingResult(ticker=ticker, company_name=name, confidence=confidence, method="exact_match")
     
     # 2. 부분 매칭 시도 (신뢰도 낮춤)

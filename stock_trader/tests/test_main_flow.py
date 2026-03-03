@@ -83,7 +83,7 @@ class TestMainFlow(unittest.TestCase):
         trade_date = datetime.now().date().isoformat()
         self.db.ensure_risk_state_today(trade_date)
         self.db.conn.execute("update risk_state set trading_enabled=0 where trade_date=?", (trade_date,))
-        self.db.commit()
+        self.db.conn.commit()  # 반드시 트랜잭션을 닫아야 execute_signal에서 BEGIN 가능
 
         status = execute_signal(self.db, bundle["signal_id"], bundle["ticker"], qty=1.0)
         self.assertEqual(status, "BLOCKED")
