@@ -49,6 +49,10 @@ h1 { text-align:center; font-size:1.6rem; color:#60a5fa; padding:10px 0; }
 .main-tabs { display:flex; gap:4px; margin:0 auto 16px; max-width:980px; background:#1e293b; padding:4px; border-radius:12px; border:1px solid #334155; }
 .main-tab-btn { flex:1; border:none; background:transparent; color:#94a3b8; padding:8px; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.85rem; transition:0.2s; }
 .main-tab-btn.active { background:#3b82f6; color:#fff; }
+.tab-panel { display:none; }
+.tab-panel.active { display:block; }
+.health-alert { text-align:center; color:#ef4444; font-size:0.8rem; margin:4px 0 10px; display:none; }
+.health-alert.show { display:block; }
 
 .profile-bar { display:flex; gap:8px; align-items:center; justify-content:center; margin-bottom:16px; flex-wrap:wrap; font-size:0.8rem; }
 .pbtn { border:1px solid #334155; background:#1e293b; color:#cbd5e1; padding:4px 10px; border-radius:6px; cursor:pointer; font-weight:600; font-size:0.75rem; }
@@ -177,6 +181,7 @@ tr:last-child td { border-bottom:none; }
   </div>
 </div>
 <div id="healthDetail" class="health-detail"></div>
+<div id="healthAlert" class="health-alert"></div>
 <div id="status"></div>
 
 <div class="main-tabs">
