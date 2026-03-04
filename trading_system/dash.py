@@ -1209,6 +1209,22 @@ class Handler(BaseHTTPRequestHandler):
             if key in existing_keys:
                 continue
 
+            # Calculate precise PNL by seeking corresponding BUY order within the UPBIT done list
+            pnl = 0
+            profit = 0
+            if side == 'SELL':
+                for prev_o in done:
+                    p_side = 'BUY' if prev_o.get('side') == 'bid' else 'SELL'
+                    if p_side == 'BUY' and prev_o.get('market') == symbol:
+                        p_created = prev_o.get('created_at') or ''
+                        if p_created < created_at:
+                            buy_price = float(prev_o.get('price') or prev_o.get('avg_price') or 0)
+                            if buy_price > 0:
+                                pnl = (price - buy_price) / buy_price
+                                buy_cost = buy_price * volume
+                                profit = (price * volume) - buy_cost - paid_fee - (buy_cost * 0.0005)
+                            break
+
             trade_log.append({
                 'uuid': uuid_,
                 'time': created_at[11:19] if isinstance(created_at, str) and len(created_at) >= 19 else '',
@@ -1219,8 +1235,8 @@ class Handler(BaseHTTPRequestHandler):
                 'volume': volume,
                 'value': price * volume,
                 'mode': 'live',
-                'pnl': 0,
-                'profit': 0,
+                'pnl': pnl,
+                'profit': profit,
                 'total_fee': paid_fee,
                 'reason': 'UPBIT_SYNC',
             })
