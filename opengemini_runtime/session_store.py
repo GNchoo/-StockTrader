@@ -1,6 +1,7 @@
+import json
 import sqlite3
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 
 class SessionStore:
@@ -23,6 +24,18 @@ class SessionStore:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS approvals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                tool TEXT NOT NULL,
+                args_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                ts DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         self.conn.commit()
 
     def add(self, user_id: str, role: str, content: str):
@@ -39,3 +52,32 @@ class SessionStore:
         ).fetchall()
         rows = list(reversed(rows))
         return [{"role": r["role"], "content": r["content"]} for r in rows]
+
+    def create_approval(self, user_id: str, tool: str, args: Dict) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO approvals(user_id, tool, args_json) VALUES (?, ?, ?)",
+            (user_id, tool, json.dumps(args, ensure_ascii=False)),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def get_approval(self, user_id: str, approval_id: int) -> Optional[Dict]:
+        row = self.conn.execute(
+            "SELECT id, tool, args_json, status FROM approvals WHERE user_id=? AND id=?",
+            (user_id, approval_id),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "tool": row["tool"],
+            "args": json.loads(row["args_json"]),
+            "status": row["status"],
+        }
+
+    def mark_approved(self, user_id: str, approval_id: int):
+        self.conn.execute(
+            "UPDATE approvals SET status='approved' WHERE user_id=? AND id=?",
+            (user_id, approval_id),
+        )
+        self.conn.commit()

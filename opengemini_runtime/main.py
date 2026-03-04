@@ -32,6 +32,16 @@ def main():
             continue
         if q in {"/exit", "/quit"}:
             break
+        if q.startswith("/approve "):
+            try:
+                req_id = int(q.split()[1])
+            except Exception:
+                print("bot> usage: /approve <id>")
+                continue
+            ans = agent.approve_and_run(args.user, req_id)
+            print(f"bot> {ans}")
+            continue
+
         ans = agent.handle(args.user, q)
         print(f"bot> {ans}")
 

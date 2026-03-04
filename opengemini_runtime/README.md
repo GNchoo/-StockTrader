@@ -23,7 +23,7 @@ export OPENAI_API_KEY="..."
 export OPENAI_MODEL="gemini-2.5-flash"
 ```
 
-## 실행
+## 실행 (콘솔)
 ```bash
 cd opengemini_runtime
 python3 -m venv .venv
@@ -32,6 +32,23 @@ pip install -r requirements.txt
 python main.py --user gn
 ```
 
+승인 필요한 툴(`write_file`, `edit_replace`)이 나오면:
+```bash
+/approve <id>
+```
+
+## 실행 (텔레그램)
+```bash
+cp .env.example .env
+# .env 값 입력 후
+python telegram_bot.py
+```
+
+텔레그램에서 승인:
+```text
+/approve 3
+```
+
 ## 주의
 - 파일 도구는 `workspace_root` 이하만 접근 가능
-- destructive 명령은 별도 승인 레이어 추가 권장
+- 쓰기/수정은 승인 후 실행되도록 가드 적용됨

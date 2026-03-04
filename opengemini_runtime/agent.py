@@ -8,6 +8,7 @@ class Agent:
         self.sessions = sessions
         self.memory = memory
         self.tools = tools
+        self.destructive_tools = {"write_file", "edit_replace"}
 
     def _call_tool(self, user_id: str, tool: str, args: Dict[str, Any]) -> str:
         if tool == "list_dir":
@@ -26,6 +27,18 @@ class Agent:
             return "\n".join(rows) if rows else "no memory"
         return f"unknown tool: {tool}"
 
+    def approve_and_run(self, user_id: str, approval_id: int) -> str:
+        row = self.sessions.get_approval(user_id, approval_id)
+        if not row:
+            return "승인 요청을 찾을 수 없습니다."
+        if row["status"] != "pending":
+            return f"이미 처리된 요청입니다. status={row['status']}"
+
+        result = self._call_tool(user_id, row["tool"], row["args"])
+        self.sessions.mark_approved(user_id, approval_id)
+        self.sessions.add(user_id, "assistant", f"approved tool_result: {result}")
+        return f"✅ 승인 실행 완료: {result}"
+
     def handle(self, user_id: str, user_text: str) -> str:
         self.sessions.add(user_id, "user", user_text)
         msgs = self.sessions.recent(user_id, limit=20)
@@ -40,6 +53,16 @@ class Agent:
             if action.get("type") == "tool":
                 tool = action.get("tool")
                 args = action.get("args", {})
+
+                if tool in self.destructive_tools:
+                    req_id = self.sessions.create_approval(user_id, tool, args)
+                    text = (
+                        f"승인 필요: {tool} {args}\n"
+                        f"실행하려면 /approve {req_id} 입력"
+                    )
+                    self.sessions.add(user_id, "assistant", text)
+                    return text
+
                 result = self._call_tool(user_id, tool, args)
                 tool_msg = f"tool_result({tool}): {result[:6000]}"
                 msgs.append({"role": "assistant", "content": json.dumps(action, ensure_ascii=False)})
