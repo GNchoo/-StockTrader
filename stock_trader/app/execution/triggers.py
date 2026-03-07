@@ -7,6 +7,103 @@ from app.execution.exit_policy import should_exit_on_opposite_signal, should_exi
 from app.storage.db import DB
 
 
+def trigger_stop_loss_orders_impl(
+    db: DB,
+    current_prices: dict[str, float] | None = None,
+    *,
+    stop_loss_pct: float = 0.02,
+    limit: int = 100,
+    broker=None,
+    _build_broker: Callable,
+    _sync_exit_order_once: Callable,
+    log_and_notify: Callable,
+) -> int:
+    """하드 스톱로스: 진입가 대비 stop_loss_pct 이상 손실 시 즉시 매도."""
+    if not current_prices:
+        return 0
+
+    broker = broker or _build_broker()
+    created = 0
+
+    for p in db.get_positions_for_exit_scan(limit=limit):
+        if int(p.get("pending_sell_cnt") or 0) > 0:
+            continue
+
+        ticker = str(p["ticker"])
+        cur_price = float(current_prices.get(ticker) or 0.0)
+        if cur_price <= 0:
+            continue
+
+        entry = float(p.get("avg_entry_price") or 0.0)
+        if entry <= 0:
+            continue
+
+        loss_pct = (entry - cur_price) / entry
+        if loss_pct < stop_loss_pct:
+            continue
+
+        position_id = int(p["position_id"])
+        signal_id = int(p.get("signal_id") or 0)
+        total_qty = float(p.get("qty") or 0.0)
+        exited_qty = float(p.get("exited_qty") or 0.0)
+        remain_qty = max(0.0, total_qty - exited_qty)
+        if remain_qty <= 0:
+            continue
+
+        log_and_notify(
+            f"STOP_LOSS_TRIGGERED:{ticker} loss={loss_pct:.2%} "
+            f"(entry={entry}, current={cur_price}, position_id={position_id})"
+        )
+
+        send = broker.send_order(
+            OrderRequest(
+                signal_id=signal_id, ticker=ticker, side="SELL",
+                qty=remain_qty, expected_price=cur_price,
+            )
+        )
+
+        db.begin()
+        try:
+            order_id = db.insert_order(
+                position_id=position_id, signal_id=signal_id, ticker=ticker,
+                side="SELL", qty=remain_qty, order_type="MARKET", status="SENT",
+                price=None, autocommit=False,
+            )
+
+            if send.status in {"SENT", "NEW", "PARTIAL_FILLED"}:
+                db.update_order_status(order_id=order_id, status=send.status, broker_order_id=send.broker_order_id, autocommit=False)
+                db.commit()
+                _sync_exit_order_once(
+                    db, broker, position_id=position_id, signal_id=signal_id, order_id=order_id,
+                    ticker=ticker, order_qty=remain_qty, broker_order_id=send.broker_order_id,
+                )
+                created += 1
+                continue
+
+            if send.status == "FILLED":
+                db.update_order_filled(order_id=order_id, price=float(send.avg_price or cur_price),
+                    filled_qty=float(send.filled_qty or remain_qty), broker_order_id=send.broker_order_id, autocommit=False)
+                pnl_delta = (float(send.avg_price or cur_price) - entry) * float(send.filled_qty or remain_qty)
+                db.apply_realized_pnl(datetime.now().date().isoformat(), pnl_delta, autocommit=False)
+                db.set_position_closed(position_id=position_id, reason_code="STOP_LOSS", exited_qty=total_qty, autocommit=False)
+                db.insert_position_event(position_id=position_id, event_type="FULL_EXIT", action="EXECUTED",
+                    reason_code="STOP_LOSS",
+                    detail_json=json.dumps({"signal_id": signal_id, "order_id": order_id, "loss_pct": round(loss_pct, 4)}),
+                    idempotency_key=f"stoploss-exit:{position_id}:{order_id}", autocommit=False)
+                db.commit()
+                created += 1
+                continue
+
+            db.update_order_status(order_id=order_id, status=send.status, broker_order_id=send.broker_order_id, autocommit=False)
+            db.commit()
+            created += 1
+        except Exception:
+            db.rollback()
+            raise
+
+    return created
+
+
 def trigger_trailing_stop_orders_impl(
     db: DB,
     current_prices: dict[str, float] | None = None,
