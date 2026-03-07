@@ -17,9 +17,12 @@ class KISBrokerError(RuntimeError):
 class KISToken:
     access_token: str
     token_type: str = "Bearer"
+    expires_at: float = 0.0  # Unix timestamp
 
 
 class KISBroker(BrokerBase):
+    TOKEN_REFRESH_MARGIN_SEC = 300  # 만료 5분 전에 갱신
+
     @staticmethod
     def _to_float(v: Any) -> float:
         if v is None:
@@ -86,11 +89,30 @@ class KISBroker(BrokerBase):
         token = data.get("access_token")
         if not token:
             raise KISBrokerError(f"token missing in response: {json.dumps(data, ensure_ascii=False)[:250]}")
-        self._token = KISToken(access_token=token, token_type=data.get("token_type", "Bearer"))
+
+        import time
+        # KIS access_token_token_expired 는 "YYYY-MM-DD HH:MM:SS" 형태
+        expires_str = data.get("access_token_token_expired", "")
+        try:
+            from datetime import datetime as _dt
+            exp_dt = _dt.strptime(expires_str, "%Y-%m-%d %H:%M:%S")
+            expires_at = exp_dt.timestamp()
+        except Exception:
+            # 파싱 실패 시 기본 23시간 후 만료 가정
+            expires_at = time.time() + 23 * 3600
+
+        self._token = KISToken(
+            access_token=token,
+            token_type=data.get("token_type", "Bearer"),
+            expires_at=expires_at,
+        )
         return self._token
 
     def _auth_header(self) -> dict[str, str]:
-        tok = self._token or self._issue_token()
+        import time
+        tok = self._token
+        if tok is None or time.time() >= tok.expires_at - self.TOKEN_REFRESH_MARGIN_SEC:
+            tok = self._issue_token()
         return {"authorization": f"Bearer {tok.access_token}"}
 
     def _tr_id_order(self, side: str) -> str:

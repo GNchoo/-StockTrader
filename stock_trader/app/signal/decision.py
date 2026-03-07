@@ -150,10 +150,12 @@ def derive_signal_fields(news, tech_score: float = 0.0, tech_rec: str = "NEUTRAL
     if combined_neg_score >= 4.0 or tech_rec == "SELL":
         decision = "BLOCK"
     elif combined_pos_score >= 3.0 and combined_neg_score <= 1.0:
-        if tech_rec == "BUY":  # 뉴스 + 차트 모두 좋으면 매수
+        if tech_rec in ("BUY", "NEUTRAL"):  # 뉴스 강 + 차트 중립 이상이면 매수
             decision = "BUY"
-        else:  # 뉴스는 좋지만 차트가 뒷받침하지 않으면 보류
+        else:  # tech_rec == "SELL"은 위 BLOCK에서 처리됨
             decision = "HOLD"
+    elif combined_pos_score >= 2.0 and combined_neg_score <= 1.5 and tech_rec == "BUY":
+        decision = "BUY"  # 뉴스 보통이지만 차트가 강하면 매수
     elif combined_pos_score >= 1.5 and combined_pos_score > combined_neg_score:
         decision = "HOLD"  # 약한 매수 신호이거나 차트가 뒷받침되지 않음
     else:

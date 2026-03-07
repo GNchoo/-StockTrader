@@ -19,6 +19,8 @@ class DB:
         self.path = Path(path)
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=5000")
         self._transaction_depth = 0  # 트랜잭션 중첩 깊이 추적
 
     def __enter__(self) -> "DB":

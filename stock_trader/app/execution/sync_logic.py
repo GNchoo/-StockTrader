@@ -1,7 +1,9 @@
 import json
 from datetime import datetime, timezone
+from typing import Literal
 from app.storage.db import DB
-from app.execution.broker_base import ExecStatus
+
+ExecStatus = Literal["FILLED", "PENDING", "BLOCKED", "PARTIAL_FILLED"]
 
 def sync_entry_order_once(
     db: DB,
@@ -110,7 +112,33 @@ def sync_entry_order_once(
             )
             if filled_qty >= float(qty) - 1e-9:
                 db.update_order_filled(order_id, float(status.avg_price or 0), filled_qty, broker_order_id, False)
+                db.set_position_open(
+                    position_id=position_id,
+                    avg_entry_price=float(status.avg_price or 0.0),
+                    opened_value=float(status.avg_price or 0.0) * qty,
+                    autocommit=False,
+                )
+                db.insert_position_event(
+                    position_id=position_id,
+                    event_type="ENTRY",
+                    action="EXECUTED",
+                    reason_code="ENTRY_FILLED",
+                    detail_json=json.dumps(
+                        {
+                            "signal_id": signal_id,
+                            "order_id": order_id,
+                            "filled_qty": filled_qty,
+                            "avg_price": status.avg_price,
+                        }
+                    ),
+                    idempotency_key=f"entry:{position_id}:{order_id}",
+                    autocommit=False,
+                )
                 db.commit()
+                log_and_notify(
+                    f"ORDER_FILLED:{ticker}@{status.avg_price} "
+                    f"(signal_id={signal_id}, position_id={position_id}, partial_complete=True)"
+                )
                 return "FILLED"
             db.commit()
             return "PARTIAL_FILLED"

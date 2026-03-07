@@ -3,7 +3,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Dict, Any
 from urllib import request, parse
@@ -30,7 +30,7 @@ class StructuredLog:
         data: Optional[Dict[str, Any]] = None,
         exception: Optional[Exception] = None
     ):
-        self.timestamp = datetime.utcnow().isoformat() + "Z"
+        self.timestamp = datetime.now(timezone.utc).isoformat()
         self.level = level
         self.message = message
         self.component = component
